@@ -97,6 +97,10 @@ struct CompanionView:View {
                 readiness("快捷键权限",detail:model.state.permission ? "已授权" : "用于发送语音与回车按键",ready:model.state.permission) {
                     if !model.state.permission { Button(model.permissionChecking ? "正在检查…" : "前往授权") { model.requestKeyboardPermission() }.disabled(model.permissionChecking) }
                 }
+                if !model.state.permission {
+                    Text("更新后若系统中已开启权限，此处仍未就绪，请在“系统设置 → 隐私与安全性 → 辅助功能”中删除旧的 Vibe 伴侣，再重新添加“应用程序”中的新版 App。")
+                        .font(.system(size:11)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
+                }
                 Divider().overlay(Palette.line)
                 VStack(alignment:.leading,spacing:10) {
                     HStack(spacing:7) {

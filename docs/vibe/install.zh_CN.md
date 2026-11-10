@@ -1,50 +1,29 @@
 **简体中文** · [English](install.md)
 
-# 安装 GitHub Release 中的 Mac App
+# 在 Mac 安装 Vibe 伴侣
 
-要求 macOS 13 或更高版本。同一个通用安装包支持 Apple Silicon 和 Intel。
-从本项目 GitHub Releases 下载 `VibeCompanion-<版本>-macOS.dmg`。
-不需要购买 Apple 开发者会员，也不需要安装编译工具。
+支持 **macOS 13+**，Apple Silicon 和 Intel 通用。从
+[GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest) 下载 DMG 或 ZIP。
 
-1. 打开 DMG，把 **Vibe 伴侣.app** 拖到 **Applications（应用程序）**。
-   推出磁盘映像，从“应用程序”打开 App。也可以下载 ZIP，解压后先把 App 移到“应用程序”。
-2. 免费分发包使用 **ad-hoc 临时签名**，没有 Apple Developer ID 证书，也未经 Apple 公证。
-   如果 macOS 拦截，先尝试打开一次，再进入**系统设置 → 隐私与安全性 → 仍要打开**，
-   为这个 App 单独确认。参考 [Apple 的操作说明](https://support.apple.com/zh-cn/102445)。
-3. 如果已核验的下载仍提示“已损坏”，而且没有“仍要打开”，退出 App 后在终端执行以下命令。
-   它只移除**这个已安装 App** 的下载隔离标记：
+1. **安装：**把 **Vibe 伴侣.app** 拖入“应用程序”，从那里打开。
+   更新时先退出旧版，再替换 App。
+2. **允许打开：**若被系统拦截，进入**系统设置 → 隐私与安全性 → 仍要打开**。
+   若提示“已损坏”且没有“仍要打开”，确认文件来自本项目 Release，核对附件
+   `SHA256SUMS.txt` 后，在终端执行以下命令，再重新打开：
 
    ```bash
    xattr -dr com.apple.quarantine "/Applications/Vibe 伴侣.app"
    ```
 
-   执行前确认文件来自本项目 Release，并对照 `SHA256SUMS.txt` 核对 SHA-256。
-   校验不一致时重新下载，不要用此命令处理。无需全局关闭 Gatekeeper。
-4. **使用语音输入时**，单独安装 [BlackHole 2ch](https://existential.audio/blackhole/) 和
-   [微信输入法](https://z.weixin.qq.com/)。在微信输入法语音设置中，麦克风选 **BlackHole 2ch**，
-   “按住说话”设为**左 Control＋左 Option＋V**；Vibe 伴侣中保持相同快捷键。
-   只使用 Agent 提醒时，可以跳过音频和快捷键控制配置。
-5. 先更新配套设备固件，再启动本版客户端。客户端自动使用空闲 UDP 端口，
-   其他程序占用 33333 也不会阻止启动。系统询问时允许局域网访问。Mac 和设备需处在可以互通的局域网中。
-6. 在 App 输入设备首页显示的六位配对码。使用语音输入和回车时，在
-   **系统设置 → 隐私与安全性 → 辅助功能**中为 **Vibe 伴侣本身**授权。
-   之前给终端的授权不会自动继承。
+3. **连接设备：**安装配套固件，让设备和 Mac 位于可互通的局域网；系统询问时允许
+   局域网访问。在 App 输入设备首页显示的六位配对码。
+4. **配置语音（可选）：**安装 [BlackHole 2ch](https://existential.audio/blackhole/) 和
+   [微信输入法](https://z.weixin.qq.com/)。在输入法中将麦克风选为 **BlackHole 2ch**，
+   “按住说话”设为**左 Control＋左 Option＋V**，Vibe 伴侣中保持相同快捷键。
+   在**系统设置 → 隐私与安全性 → 辅助功能**中开启 **Vibe 伴侣**。
+   只用 Agent 提醒时跳过本步。
 
-保持 Mac 唤醒并选中一个输入框。按住设备上键说话，松开结束，短按下键回车。
-关闭窗口后 App 仍在菜单栏运行；退出 App 才停止接收。可按需开启登录时自动运行。
+更新后若辅助功能已勾选，App 仍提示未授权，删除旧条目，再添加“应用程序”中的新版 App。
 
-授权后返回 App，会自动重新检测；若系统需要重新载入进程，App 会自动恢复当前页面与未保存草稿，
-无需手动退出重开。临时签名更新后，系统仍可能要求重新授权。
-
-## 更新版本
-
-退出正在运行的 App，替换“应用程序”中的旧版本，再打开新版本。
-免费 ad-hoc 签名随构建变化，macOS 可能再次要求“仍要打开”或辅助功能授权。
-如果辅助功能已经勾选但快捷键失效，移除旧的 Vibe 条目，再重新添加新的 App。
-保持 App 名称与安装路径一致。设备设置保存在设备中；App 的配对记录存放在
-仅当前账户可读写的本地文件，不使用钥匙串。同一账户下的其他程序仍可能读取该文件。
-如果配对记录丢失，在设备上解除电脑配对，再重新配对；不会删除已保存的 Wi-Fi。
-
-后续从 GitHub Releases 下载更新，本版不自动安装更新。
-正式发布前核对该版本固件和客户端的配套验收。Intel 实机、干净 Mac 安装仍需单独验证，
-签名状态不代表功能已经通过测试。
+保持电脑唤醒，选中输入框。按住设备上键说话，松开结束，短按下键回车。
+关闭窗口后 App 仍在菜单栏运行；退出 App 才停止接收。App 不使用钥匙串。
