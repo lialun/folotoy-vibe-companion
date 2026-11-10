@@ -45,10 +45,19 @@ int main(void) {
     vibe_signal_update(&signal,-128);assert(!signal.valid);
     vibe_signal_update(&signal,-59);assert(signal.valid && signal.bars==3);
     for (int i=0;i<20;i++) { vibe_signal_update(&signal,i%2?-59:-61);assert(signal.bars==3); }
-    for (int i=0;i<8;i++) vibe_signal_update(&signal,-68);assert(signal.bars==2);
+    for (int i=0;i<8;i++) {
+        vibe_signal_update(&signal,-68);
+    }
+    assert(signal.bars==2);
     for (int i=0;i<20;i++) { vibe_signal_update(&signal,i%2?-74:-76);assert(signal.bars==2); }
-    for (int i=0;i<8;i++) vibe_signal_update(&signal,-85);assert(signal.bars==1);
-    for (int i=0;i<8;i++) vibe_signal_update(&signal,-40);assert(signal.bars==3);
+    for (int i=0;i<8;i++) {
+        vibe_signal_update(&signal,-85);
+    }
+    assert(signal.bars==1);
+    for (int i=0;i<8;i++) {
+        vibe_signal_update(&signal,-40);
+    }
+    assert(signal.bars==3);
     signal=(vibe_signal_t){0};assert(!signal.valid && signal.bars==0);vibe_signal_update(&signal,-90);assert(signal.bars==1);
     puts("Theme boundaries, timezone/midnight, legacy prefs migration and RSSI hysteresis: PASS");
 }
