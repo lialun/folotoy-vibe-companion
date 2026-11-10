@@ -1,6 +1,6 @@
 [English](/docs/README.md) · **简体中文**
 
-> **Vibe 伴侣：**请先看[项目介绍](../README.zh_CN.md)、[使用指南](vibe/README.zh_CN.md)
+> **Vibe 伴侣：**请先看[项目介绍](../README.md)、[使用指南](vibe/README.zh_CN.md)
 > 或[设计规范](vibe/DESIGN.zh_CN.md)。下方保留 FoloToy 上游硬件与工程基线文档。
 
 <h1 align="center">FoloToy AI PASSPORT</h1>

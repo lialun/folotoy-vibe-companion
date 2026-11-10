@@ -16,5 +16,5 @@
 
 ## 文档索引
 
-- [doc-conventions.zh_CN.md](doc-conventions.zh_CN.md)：按任务加载上下文、文档职责、写作维护和内容安全。
+- [doc-conventions.zh_CN.md](doc-conventions.zh_CN.md)：按任务加载上下文、双语文档与中文默认项目 README、文档职责、写作维护和内容安全。
 - [commit-and-pr.zh_CN.md](commit-and-pr.zh_CN.md)：提交规范 + 提交与 PR 约定。

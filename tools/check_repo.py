@@ -32,7 +32,7 @@ ROOT_MARKDOWN_ALLOWLIST = {
     "CLAUDE.md",
     "CLAUDE.zh_CN.md",
     "README.md",
-    "README.zh_CN.md",
+    "README.en.md",
 }
 # Register only concrete, vendored component directories, e.g. "components/foo".
 # These exemptions never change the input to sensitive-content/conflict checks.
@@ -207,7 +207,7 @@ def check_community_document_links(files: list[Path], errors: list[str]) -> None
 def check_document_languages(
     files: list[Path], errors: list[str], vendored_roots: tuple[Path, ...] = ()
 ) -> None:
-    """Require an English default and a linked Simplified Chinese peer."""
+    """Check bilingual pairs; only the product's root README defaults to Chinese."""
     markdown = {
         path for path in files
         if path.suffix.lower() == ".md" and not is_vendored_document(path, vendored_roots)
@@ -218,7 +218,26 @@ def check_document_languages(
         text = path.read_text(encoding="utf-8")
         opening = "\n".join(text.splitlines()[:8])
 
-        if name.endswith(".zh_CN.md"):
+        if path == ROOT / "README.md":
+            peer_name = "README.en.md"
+            english = False
+        elif path == ROOT / "README.en.md":
+            peer_name = "README.md"
+            english = True
+        else:
+            peer_name = None
+
+        if peer_name is not None:
+            if path.with_name(peer_name) not in markdown:
+                errors.append(f"{name}: missing root README peer {peer_name}")
+            elif not any(
+                target.strip().split(maxsplit=1)[0].strip("<>") == peer_name
+                for target in MARKDOWN_LINK_RE.findall(opening)
+            ):
+                errors.append(f"{name}: missing top language link to {peer_name}")
+            if not english:
+                continue
+        elif name.endswith(".zh_CN.md"):
             default_name = f"{name[:-len('.zh_CN.md')]}.md"
             default_path = path.with_name(default_name)
             if default_path not in markdown:
@@ -230,17 +249,17 @@ def check_document_languages(
                     f"{path.relative_to(ROOT).as_posix()}: missing top language link to {default_name}"
                 )
             continue
-
-        chinese_name = f"{path.stem}.zh_CN.md"
-        chinese_path = path.with_name(chinese_name)
-        if chinese_path not in markdown:
-            errors.append(
-                f"{path.relative_to(ROOT).as_posix()}: missing Simplified Chinese peer {chinese_name}"
-            )
-        elif chinese_name not in opening:
-            errors.append(
-                f"{path.relative_to(ROOT).as_posix()}: missing top language link to {chinese_name}"
-            )
+        else:
+            chinese_name = f"{path.stem}.zh_CN.md"
+            chinese_path = path.with_name(chinese_name)
+            if chinese_path not in markdown:
+                errors.append(
+                    f"{path.relative_to(ROOT).as_posix()}: missing Simplified Chinese peer {chinese_name}"
+                )
+            elif chinese_name not in opening:
+                errors.append(
+                    f"{path.relative_to(ROOT).as_posix()}: missing top language link to {chinese_name}"
+                )
 
         english_prose = text.replace("简体中文", "")
         match = CJK_RE.search(english_prose)

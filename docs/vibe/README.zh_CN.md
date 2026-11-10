@@ -2,7 +2,7 @@
 
 # 安装与使用 Vibe 伴侣
 
-项目介绍见[根 README](../../README.zh_CN.md)。本指南说明设备配置与使用；
+项目介绍见[根 README](../../README.md)。本指南说明设备配置与使用；
 [Mac 安装指南](install.zh_CN.md)说明客户端，[Agent 接入](agents.zh_CN.md)说明 Hook 和插件。
 
 ## 首次配置

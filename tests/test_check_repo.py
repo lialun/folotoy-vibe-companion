@@ -100,6 +100,35 @@ class VendoredDocumentationTest(unittest.TestCase):
         ]
         self.assertEqual(self.document_errors(files), [])
 
+    def test_root_readme_defaults_to_chinese_with_english_switch(self) -> None:
+        files = [
+            self.document("README.md", "**简体中文** · [English](README.en.md)\n# 项目介绍\n"),
+            self.document("README.en.md", "**English** · [简体中文](README.md)\n# Project\n"),
+        ]
+        self.assertEqual(self.document_errors(files), [])
+
+    def test_root_readme_still_requires_a_peer_and_reciprocal_links(self) -> None:
+        page = self.document("README.md", "# 项目介绍\n")
+        self.assertTrue(any("missing root README peer" in error for error in self.document_errors([page])))
+        peer = self.document("README.en.md", "# Project\n")
+        errors = self.document_errors([page, peer])
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all("missing top language link" in error for error in errors))
+
+    def test_root_english_readme_rejects_chinese_prose(self) -> None:
+        files = [
+            self.document("README.md", "[English](README.en.md)\n# 项目\n"),
+            self.document("README.en.md", "[简体中文](README.md)\n# 中文正文\n"),
+        ]
+        self.assertTrue(any("must use English prose" in error for error in self.document_errors(files)))
+
+    def test_chinese_default_exception_does_not_apply_to_nested_readmes(self) -> None:
+        files = [
+            self.document("docs/README.md", "[简体中文](README.zh_CN.md)\n# 中文正文\n"),
+            self.document("docs/README.zh_CN.md", "[English](README.md)\n# 中文\n"),
+        ]
+        self.assertTrue(any("must use English prose" in error for error in self.document_errors(files)))
+
     def test_invalid_root_registrations_fail_closed(self) -> None:
         file_path = self.document("components/vendor_audio/README.md")
         for name in (

@@ -348,7 +348,7 @@ application is registered where it is developed.
 
 ### Rules
 
-- Only touch fork-owned root READMEs (`README.md` / `README.zh_CN.md`); do not
+- Only touch fork-owned root READMEs (`README.md` / `README.en.md`); do not
   modify the upstream project overview at `docs/README.md`.
 - Check the root README on each relevant branch (`main` and the current
   `feature/*` branch), not just one branch.
@@ -363,8 +363,8 @@ application is registered where it is developed.
 - The fork root README and the hosting branch's root README are fork-owned
   content. Commit them directly (merge) rather than opening a PR; open a PR only
   when the change is meant to go upstream.
-- Follow the repository language rule: English at the default `.md` path and
-  Simplified Chinese at the paired `.zh_CN.md`, aligned in the same change.
+- Follow the [documentation language conventions](../../contribution/doc-conventions.md),
+  including the Chinese-default root README, and keep both languages aligned.
 
 ### Steps
 

@@ -2,7 +2,7 @@
 
 # Set up and use Vibe Companion
 
-For the project overview, see the [root README](../../README.md). This guide
+For the project overview, see the [root README](../../README.en.md). This guide
 covers the device; [Mac installation](install.md) covers the companion and
 [Agent integration](agents.md) covers hooks and plugins.
 

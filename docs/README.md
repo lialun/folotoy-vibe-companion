@@ -1,6 +1,6 @@
 **English** · [简体中文](/docs/README.zh_CN.md)
 
-> **Vibe Companion:** start with the [application overview](../README.md),
+> **Vibe Companion:** start with the [application overview](../README.en.md),
 > [setup guide](vibe/README.md) or [design contract](vibe/DESIGN.md).
 > The hardware and engineering baseline below is retained from upstream FoloToy.
 

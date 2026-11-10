@@ -10,7 +10,7 @@
 
 ## 工作流
 
-- **Static checks**（`static-checks.yml`）：校验英文默认双语 Markdown、相对链接、GitHub Action
+- **Static checks**（`static-checks.yml`）：校验双语 Markdown（含中文默认根 README）、相对链接、GitHub Action
   完整 SHA、Issue Form 基本结构、依赖锁文件、冲突标记和疑似敏感信息；随后运行 `actionlint` 与
   host tests。它在每个 pull request 上运行。
 - **Firmware checks**（`firmware-checks.yml`）：在全新隔离的构建/配置目录中，使用 ESP-IDF 5.5.3 /

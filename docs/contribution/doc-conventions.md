@@ -8,12 +8,12 @@ These rules apply equally to human contributors and AI agents. Documentation is 
 
 ## Language and file layout
 
-- English is mandatory at every maintained default Markdown path: `name.md`.
-- Simplified Chinese is provided at the paired path `name.zh_CN.md`.
+- The product overview defaults to Simplified Chinese at root `README.md`, with English at `README.en.md`.
+- All other maintained Markdown documents use English at `name.md` and Simplified Chinese at the paired `name.zh_CN.md`. The root README exception does not apply to nested READMEs.
 - Both files begin with reciprocal language links. Keep their headings, facts, examples, safety warnings, and links aligned in the same change.
-- English default prose must not contain Chinese text. The `简体中文` switch label is the only allowed CJK text on an English page.
+- English prose must not contain Chinese text. The `简体中文` switch label is the only allowed CJK text on an English page, including `README.en.md`.
 - Code, commands, paths, URLs, identifiers, and data fields remain unchanged between translations where appropriate.
-- The repository check rejects an unpaired document, a missing language switch, or CJK prose in an English default file.
+- The repository check rejects an unpaired document, a missing language switch, or CJK prose in an English file.
 
 ### GitHub community-document links
 

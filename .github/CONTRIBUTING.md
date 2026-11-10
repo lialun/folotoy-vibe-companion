@@ -3,7 +3,7 @@ English | [简体中文](/.github/CONTRIBUTING.zh_CN.md)
 # Contributing to Vibe Companion
 
 Contributions to the device firmware, desktop client, Agent adapters, design,
-and documentation are welcome. Start with the [project overview](/README.md)
+and documentation are welcome. Start with the [project overview](/README.en.md)
 and [design contract](/docs/vibe/DESIGN.md). Discuss substantial interaction or
 architecture changes in this repository's Issues before implementing them.
 

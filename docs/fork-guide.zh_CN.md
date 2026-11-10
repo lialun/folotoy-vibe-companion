@@ -70,3 +70,6 @@ fork，放在 `docs/assets/` 下，不提交回上游。通用、上游也受益
 相对仓库根目录的 `docs/reference/<username>/<app-name>/` 应用档案与
 `docs/reference/<username>/` 发布后经验条目属于上游，作为 PR 提案回上游。发布后的工作请用
 `experience-pr` 与 `plays-archive` skill，见 `docs/development/release/project-completion.md`。
+
+本项目的文档语言遵守[文档规范](contribution/doc-conventions.zh_CN.md)：根 `README.md` 默认中文，
+英文位于 `README.en.md`；其他文档保留英文 `.md` 和中文 `.zh_CN.md` 配对与双向切换。

@@ -228,8 +228,8 @@ try canvas(width: 1600, height: 880, output: output.appendingPathComponent("vibe
     mark(x: 84, y: 73, size: 53)
     text("FOLOTOY", x: 157, y: 78, width: 420, size: 15, weight: .medium, ink: 0x9cb9ab, spacing: 3)
     text("Vibe 伴侣", x: 157, y: 101, width: 470, size: 25, weight: .semibold)
-    text("随手说话。\n安心专注。\n及时回应 AI。", x: 78, y: 212, width: 710,
-         size: 74, weight: .semibold, ink: 0xf0f2e7, lineHeight: 87)
+    text("语音输入、AI 提醒，\n你的 Vibe Coding 伴侣。", x: 78, y: 250, width: 710,
+         size: 66, weight: .semibold, ink: 0xf0f2e7, lineHeight: 90)
     text("语音输入，随手可用。\nAI 需要你时，即刻提醒。", x: 84, y: 520, width: 650,
          size: 25, ink: 0xb0c5ba, lineHeight: 37)
     device(weather, x: 782, y: 294, width: 270)
@@ -258,7 +258,7 @@ try canvas(width: 576, height: 768, output: output.appendingPathComponent("vibe-
     NSGradient(starting: color(0x0b1d20), ending: color(0x1b3d35))!.draw(in: bounds, angle: -35)
     mark(x: 38, y: 35, size: 44)
     text("Vibe 伴侣", x: 96, y: 36, width: 420, size: 27, weight: .semibold)
-    text("随手说话，及时回应 AI", x: 98, y: 75, width: 430, size: 13, ink: 0xa9c8b5)
+    text("语音输入、AI 提醒，你的 Vibe Coding 伴侣。", x: 98, y: 75, width: 430, size: 13, ink: 0xa9c8b5)
     text("开口即输入。\nAI 有事会叫你。", x: 36, y: 137, width: 510,
          size: 42, weight: .semibold, lineHeight: 54)
     text("无线语音  ·  Agent 提醒  ·  专注计时", x: 39, y: 264,

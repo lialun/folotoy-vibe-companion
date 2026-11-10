@@ -10,8 +10,7 @@ Two workflows validate pull requests: `.github/workflows/static-checks.yml` and
 
 ## Workflows
 
-- **Static checks** (`static-checks.yml`): validates English-default bilingual
-  Markdown, relative links, full-SHA Actions, issue forms, the dependency lock,
+- **Static checks** (`static-checks.yml`): validates bilingual Markdown (including the Chinese-default root README), relative links, full-SHA Actions, issue forms, the dependency lock,
   conflict markers, and likely sensitive data; then runs `actionlint` and host
   tests. It runs on every pull request.
 - **Firmware checks** (`firmware-checks.yml`): runs
