@@ -12,7 +12,7 @@
 
 ## Unreleased
 
-## v0.8.2-vibe-companion - 2026-11-10
+## v0.8.3-vibe-companion - 2026-11-10
 
 First public Vibe Companion release for FoloToy AI Passport, with a native macOS companion app.
 

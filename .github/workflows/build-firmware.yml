@@ -51,16 +51,17 @@ jobs:
         id: artifact_name
         run: echo "name=passport-${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
 
-      - name: Package redistribution notices
-        run: python3 tools/package_notices.py build/THIRD_PARTY_NOTICES.txt
+      - name: Stage firmware and redistribution notices
+        run: |
+          mkdir -p "$RUNNER_TEMP/vibe-firmware"
+          cp build/FoloToy-AI-Passport-full.bin "$RUNNER_TEMP/vibe-firmware/"
+          python3 tools/package_notices.py "$RUNNER_TEMP/vibe-firmware/THIRD_PARTY_NOTICES.txt"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact_name.outputs.name }}
-          path: |
-            build/FoloToy-AI-Passport-full.bin
-            build/THIRD_PARTY_NOTICES.txt
+          path: ${{ runner.temp }}/vibe-firmware/
           if-no-files-found: error
 
   macos:

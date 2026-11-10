@@ -10,7 +10,7 @@
 
 ## Unreleased
 
-## v0.8.2-vibe-companion - 2026-11-10
+## v0.8.3-vibe-companion - 2026-11-10
 
 Vibe 伴侣首个公开版本，包含 FoloToy AI Passport 配套固件和原生 macOS 客户端。
 
