@@ -66,7 +66,7 @@ credentials out of the repository and release artifacts.
 
 The workflow runs repository/host checks and builds firmware and the universal Mac app. Manual
 dispatch produces downloadable Actions artifacts without publishing a release.
-An explicitly pushed tag matching `v*-vibe-companion` **publishes a release**
+An explicitly pushed tag such as `v0.8.4` (`vMAJOR.MINOR.PATCH`) **publishes a release**
 containing both packages after all three validation jobs pass. Only the release job can write repository
 contents. Automatic Mac builds are ad-hoc signed and do not use Apple secrets.
 `tools/package_release.py` generates bilingual installation attachments, combined
@@ -79,7 +79,9 @@ an empty directory and run `python3 tools/package_release.py <directory>`.
 
 Before publishing: perform device acceptance, test on clean Apple Silicon and
 Intel Macs, prepare both changelog languages, select a version and tag such as
-`v0.1.0-vibe-companion`, and review/update the bilingual release notes.
+`v0.8.4`, and review/update the bilingual release notes. Tags and release titles
+use the version alone, without an application suffix. Existing releases retain
+their original names.
 Do not replace the free packages with a paid signing dependency.
 Include font/source licenses and SHA-256 sums.
 Do not describe the local command-line tests as a successful GitHub Actions run.

@@ -4,8 +4,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 out="${VIBE_MAC_OUTPUT:-${root}/build/macos}"
 version="${VIBE_VERSION:-0.1.0}"
 if [[ -z "${VIBE_VERSION:-}" && "${GITHUB_REF_TYPE:-}" == tag ]]; then
-    version="${GITHUB_REF_NAME#v}"
-    version="${version%-vibe-companion}"
+    version="$(python3 "${root}/tools/release_version.py" "${GITHUB_REF_NAME}")"
 fi
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
     echo "Invalid release version" >&2; exit 2

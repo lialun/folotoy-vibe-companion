@@ -8,6 +8,7 @@ on:
       - "assets/fonts/*license*"
       - "assets/icons/weather/LICENSE*"
       - "tools/package_notices.py"
+      - "tools/release_version.py"
       - "docs/vibe/install*.md"
       - ".github/workflows/macos-checks.yml"
   push:
@@ -18,6 +19,7 @@ on:
       - "assets/fonts/*license*"
       - "assets/icons/weather/LICENSE*"
       - "tools/package_notices.py"
+      - "tools/release_version.py"
       - "docs/vibe/install*.md"
       - ".github/workflows/macos-checks.yml"
   workflow_dispatch:

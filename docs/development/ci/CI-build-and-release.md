@@ -4,7 +4,7 @@
 
 # Automated Build and Release
 
-`.github/workflows/build-firmware.yml` builds firmware and the universal Vibe Companion Mac app for `v*-vibe-companion` tags and manual dispatch. Ordinary branch pushes do not trigger it. Manual branch runs only upload Actions artifacts; pushing a release tag publishes a release after all validation jobs pass. Review files and obtain publishing authorization before pushing a tag. Keep this page synchronized with the workflow.
+`.github/workflows/build-firmware.yml` builds firmware and the universal Vibe Companion Mac app for version tags (`vMAJOR.MINOR.PATCH`) and manual dispatch. Ordinary branch pushes do not trigger it. Manual branch runs only upload Actions artifacts; pushing a release tag publishes a release after all validation jobs pass. Review files and obtain publishing authorization before pushing a tag. Keep this page synchronized with the workflow.
 
 The checks job runs `./tools/validate.sh --static`. The build job restores ccache, runs `./tools/validate.sh --firmware` with ESP-IDF 5.5.3 for ESP32-C3, verifies the bootloader, partition table, and application at the offsets generated in `flash_args`, checks the 8 MB Flash arguments and configured partition layout, then uploads `FoloToy-AI-Passport-full.bin`. The repository default places these images at `0x0`, `0x8000`, and `0x10000`; user-defined partition tables may change the application offset.
 
@@ -18,28 +18,16 @@ Open `https://ai-passport.folotoy.cn/tools/web-flasher/`, connect the USB JTAG/s
 
 For board and flashing details, see [the hardware development guide](../../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md).
 
-## Release title
+## Release versions
 
-When this repository publishes firmware for several different applications from
-the same source tree, a bare version number does not tell a user which app a
-release is for. Give each tag a name that carries the version and the app, and
-make sure the release title shows both.
+This repository ships one product. Use **`vMAJOR.MINOR.PATCH`** for tags and
+release titles, for example `v0.8.4`, without an application suffix. The Mac
+package and app version are `0.8.4`. The workflow listens for `v*` tags, validates
+the exact numeric format with `tools/release_version.py`, and blocks publication
+for malformed or suffixed tags. Manual runs on a branch only upload artifacts.
 
-- **Tag naming convention**: name tags as `v<version>-<app-name>` in
-  lowercase-kebab-case, e.g. `v0.1.0-voice-keychain`, `v1.0.0-pocket-pomodoro`.
-  The `<app-name>` is the application this release builds (see the
-  repository-relative `docs/reference/<username>/<app-name>/` archive naming).
-  A tag that only says a version is ambiguous when several apps share the tree.
-- **After the release is published, confirm the release title.** The workflow
-  sets the title to the tag name, so a correctly-named tag already reads
-  `v0.1.0-voice-keychain`. If the tag did not include the app, or the title is
-  not obvious at a glance, edit the release (GitHub: `Edit release`; GitLab:
-  edit the tag) so the title is `<version> <app-name>`, e.g. `v0.1.0 Voice
-  Keychain`. One quick scan of the release list should distinguish which app a
-  release is for.
-- **Keep title and tag consistent.** Use `<version>-<app-name>` so the app name
-  is visible in both the tag list and the release list. Do not rely on a
-  human-readable body alone to carry the app name.
+Existing tags and published releases keep their original names; do not rename or
+republish them just to change the naming convention.
 
 ## Changelog preparation
 

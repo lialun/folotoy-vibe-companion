@@ -11,7 +11,7 @@
 
 ## 触发条件
 
-- **push tag**：推送 `v*-vibe-companion` 格式标签（如 `v0.1.0-vibe-companion`）时触发，所有检查和构建成功后公开包含两端安装包的 Release。
+- **push tag**：推送 `vMAJOR.MINOR.PATCH` 格式标签（如 `v0.8.4`）时触发，所有检查和构建成功后公开包含两端安装包的 Release。
 - **workflow_dispatch**：可在 GitHub Actions 页面手动触发（用于调试/预发布验证）。
 
 > 普通分支 push 不触发这个工作流，可从 Actions 手动运行。
@@ -44,20 +44,14 @@
 
 步骤：连接设备（USB JTAG/serial debug unit）→ 选择本 Release 的合并固件 `FoloToy-AI-Passport-full.bin` → 选择波特率（如 460800）→ 开始写入。目标是 8MB Flash 板卡，无需其它参数。
 
-## Release 标题
+## 发布版本
 
-当本仓库从同一棵源码树发布多个不同应用时，只有版本号看不出这个 Release 是哪个应用。给每个 tag 起一个
-同时带版本与应用名的名字，并确保 Release 标题两者都显示。
+本仓库只发布一个产品，标签与 Release 标题统一使用 **`vMAJOR.MINOR.PATCH`**，
+例如 `v0.8.4`，不加应用名后缀。对应 Mac 安装包与 App 版本为 `0.8.4`。
+工作流监听 `v*` 标签，由 `tools/release_version.py` 校验完整的三段数字格式；
+格式不正确或带后缀的标签无法发布。分支上手动运行只上传构建产物。
 
-- **Tag 命名约定**：按 `v<版本>-<应用名>` 小写连字符命名，例如 `v0.1.0-voice-keychain`、
-  `v1.0.0-pocket-pomodoro`。`<应用名>` 是该 Release 构建的应用（见
-  相对仓库根目录的 `docs/reference/<username>/<app-name>/` 档案命名）。多应用共享同一棵树时，只写版本号的 tag 会有歧义。
-- **发布成功后，核对 Release 标题**：workflow 会把标题设为 tag 名，因此命名正确的 tag 本身就显示成
-  `v0.1.0-voice-keychain`。若 tag 没带应用名，或标题一眼看不出是哪个应用，就编辑该 Release
-  （GitHub：`Edit release`；GitLab：编辑 tag），让标题为 `<版本> <应用名>`，例如 `v0.1.0 Voice
-  Keychain`。快速扫一遍 Release 列表，就能区分每个 Release 是哪个应用。
-- **标题与 tag 保持一致**：用 `<版本>-<应用名>`，让应用名在 tag 列表和 Release 列表里都可见。不要只靠
-  人类可读的正文承载应用名。
+已有标签和已发布的 Release 保留原名，不为调整命名而改名或重新发布。
 
 ## 变更日志准备
 
