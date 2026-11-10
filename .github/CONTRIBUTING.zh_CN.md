@@ -1,78 +1,48 @@
-[English](/.github/CONTRIBUTING.md) | 简体中文
+简体中文 | [English](/.github/CONTRIBUTING.md)
 
-# 贡献指南
+# 参与 Vibe 伴侣开发
 
-感谢你为 FoloToy AI Passport 贡献代码、文档、固件和反馈。本仓库是面向 AI agent 的
-开源可穿戴 AI 硬件的开发基线。它常被 fork 后二次开发，fork 用户约定见
-[`docs/fork-guide.zh_CN.md`](/docs/fork-guide.zh_CN.md)。
+欢迎改进设备固件、桌面客户端、Agent 适配、设计和文档。先阅读[项目介绍](/README.zh_CN.md)
+和[设计规范](/docs/vibe/DESIGN.zh_CN.md)。涉及较大交互或架构变化时，先在本仓库 Issues
+讨论问题与预期，再开始实现。
 
-## 开始之前
+## 开发入口
 
-- 先读 [`AGENTS.zh_CN.md`](/AGENTS.zh_CN.md)：它是 AI agent 应遵循规则的权威入口与索引，不是本指南的替代品。
-- 先读 [`README.zh_CN.md`](/docs/README.zh_CN.md) 的硬件能力契约，以及
-  [AI 硬件开发指南](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) 的完整硬件上下文。
-- 参与社区时请遵守 [`CODE_OF_CONDUCT.zh_CN.md`](/.github/CODE_OF_CONDUCT.zh_CN.md)；普通使用问题见 [`SUPPORT.zh_CN.md`](/.github/SUPPORT.zh_CN.md)。
-- 不要提交凭证、令牌、授权文件或个人数据。
-- 仓库的 `main` 分支始终与上游基线保持同步；fork 用户在 `feature/*` 分支开发功能（见 `docs/fork-guide.md`）。
+- 设备应用：`main/vibe/`，复用 `components/bsp/` 的硬件驱动。
+- macOS 客户端和 Hook 适配：`macos/app/`、`macos/agents/`。
+- 产品文档：`docs/vibe/`。根 README 介绍项目；详细操作、默认值和实现记录放入指南。
+- 固件工具链：ESP-IDF 5.5.3。桌面端：Swift 与 macOS SDK，目标为 macOS 13+、arm64
+  和 x86_64，见[构建说明](/docs/vibe/release.zh_CN.md)。
 
-## 开发与验证
+从包含 Vibe 应用的分支新建工作分支。上游 FoloToy 硬件测试基线不是本应用。保留已有修改，
+不提交生成的构建结果和本机配置。AI 辅助开发遵循 [AGENTS.md](/AGENTS.md)。
 
-使用 ESP-IDF 5.5.3。全新机器先按
-[环境引导](/docs/development/engineering/environment-setup.zh_CN.md)完成安装。
+## 修改与验证
 
-编译优先运行仓库固件门禁，烧录优先把验证过的合并镜像写入 `0x0`。以下直接
-IDF 命令只用于增量开发。
-
-```bash
-source <ESP-IDF-v5.5.3-路径>/export.sh
-idf.py --version             # 必须输出 ESP-IDF v5.5.3
-./tools/validate.sh --firmware # 优先生成合并固件
-idf.py set-target esp32c3     # 配置目标芯片（fresh checkout 后/换 target 后运行）
-idf.py build                  # 可选：增量 app 编译
-idf.py flash monitor          # 可选：增量 app 烧录
-idf.py fullclean              # 配置过期时清空生成状态（勿用于清理用户源码改动）
-```
-
-当前基线含一个可脱离硬件运行的纯逻辑测试：
+修改应便于独立审查，说明具体问题、最终行为、兼容性或存储影响以及验证结果。
+测试覆盖有意义的行为和失败情况，不把编译通过当作设备验收。
 
 ```bash
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_ui_pixel_math.c main/ui_pixel_math.c \
-  -o /tmp/test_ui_pixel_math
-/tmp/test_ui_pixel_math
+./tools/validate.sh --static  # 仓库检查和主机测试
+./tools/validate.sh          # 完整固件验证；先激活 ESP-IDF
+bash macos/build.sh          # Mac 上构建通用 App、原生测试和安装包
 ```
 
-本仓库为本地开发和 CI 提供同一个验证入口：
+固件／UI 修改应保持三键交互、语音优先、低功耗和内存所有权约定。说明新增常驻内存、
+峰值分配及未验证的设备行为；按原生分辨率检查两种主题和中文字形。不要为了简化页面
+改动音频／网络资源所有权。刷机需得到设备所有者授权。
 
-```bash
-./tools/validate.sh --static
-./tools/validate.sh --firmware  # 需要先激活 ESP-IDF 5.5.3 环境
-./tools/validate.sh             # 完整门禁
-```
-
-遵守 [`docs/development/engineering/build-and-test.zh_CN.md`](/docs/development/engineering/build-and-test.zh_CN.md) 的
-验证要求：干净的 `idf.py build` 是最低自动检查，不是硬件验收；构建结果与真机结果
-分开记录，禁止把编译通过描述成硬件验证通过。
+Agent 适配应保留无关用户配置，只安装本项目拥有的 Hook，确保 helper 执行有界、失败时
+不阻塞 Agent。不向设备发送提问、回答、工具参数或会话文件；检查重复回调、不同会话，
+以及声明支持的实际 Agent 入口。
 
 ## 提交 Pull Request
 
-1. 从 `main` 创建短生命周期 `feature/*` 分支，保持一个 PR 只解决一个清晰的问题。
-2. PR 标题使用 `<type>(<scope>): <简短描述>`，例如 `feat(bsp): ...`、`docs: ...`。
-   可用 type 见 [`docs/contribution/commit-and-pr.zh_CN.md`](/docs/contribution/commit-and-pr.zh_CN.md)。
-3. Review 完整 diff，确认没有凭证、无关生成文件或意外改动。
-4. 遵守 `docs/contribution/commit-and-pr.md` 的 PR 要求：说明测试的硬件/版本、
-   行为变更摘要、构建与真机结果，链接相关 issue，并对引脚、显示旋转、codec 时钟、
-   ADC、DMA 改动显式记录观察到的真机结果。
-5. 等待 CI 和 review；除维护者显式例外外，不要直接向 `main` 推送。
+标题应说明具体改动，例如 `fix(radio): retain buffered input across decode`。
+UI 变更附相关截图，分开报告构建、主机测试、设备测试。同步更新权威文档的中英文版本。
+普通修改不更新上游公共变更日志；发布准备负责整理版本发布说明。除非确实要向上游贡献，
+PR 应指向本项目的应用分支，不是 FoloToy 官方仓库。
 
-小型文档修正也欢迎直接提交 PR。涉及硬件、架构或用户数据的较大改动，建议先开 issue
-讨论范围和兼容性。
-
-## 贡献的许可
-
-本仓库使用 [MIT](/LICENSE) 许可证。提交贡献即表示你同意按本仓库的 MIT 条款并入你的贡献。
-
-## 安全漏洞
-
-不要在公开 issue、Pull Request 或讨论中披露漏洞、凭证或可利用细节。请按
-[`SECURITY.zh_CN.md`](/.github/SECURITY.zh_CN.md) 的私密报告流程处理。
+贡献代码遵循 [MIT 许可](/LICENSE)，保留第三方许可。遵守[行为准则](/.github/CODE_OF_CONDUCT.zh_CN.md)，
+安全问题通过[私密报告流程](/.github/SECURITY.zh_CN.md)提交。
+不要包含凭证、配对令牌、个人数据或未脱敏日志。

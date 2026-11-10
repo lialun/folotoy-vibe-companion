@@ -5,15 +5,27 @@
 #include "bsp_pins.h"
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_timer.h"
+#include "sdkconfig.h"
 #include <string.h>
 
 static const char *TAG = "bsp_lvgl";
 
-#define BSP_LVGL_DRAW_BUFFER_LINES 40
+#ifndef CONFIG_BSP_LVGL_DRAW_BUFFER_LINES
+#define CONFIG_BSP_LVGL_DRAW_BUFFER_LINES 40
+#endif
+#define BSP_LVGL_DRAW_BUFFER_LINES CONFIG_BSP_LVGL_DRAW_BUFFER_LINES
 
 static lv_display_t *s_disp;
 static bool s_port_initialized;
 static bool s_port_init_failed;
+static bool s_refresh_paused;
+static bool s_panel_asleep;
+
+static uint32_t display_tick_ms(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
 
 static void rounded_flush_event(lv_event_t *event)
 {
@@ -67,7 +79,12 @@ lv_display_t *bsp_lvgl_init(void) {
             ESP_LOGE(TAG, "LVGL port 初始化未完成，需重启后重试");
             return NULL;
         }
-        const lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
+        lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
+        // LVGL reads monotonic time on demand below: its 20 ms refresh remains
+        // accurate without a 5 ms clock interrupt. The port's mandatory timer
+        // becomes a sparse maintenance tick, not a frame/input rate.
+        pc.timer_period_ms = 30000;
+        pc.task_max_sleep_ms = 30000;
         if (lvgl_port_init(&pc) != ESP_OK) {
             s_port_init_failed = true;
             ESP_LOGE(TAG, "lvgl_port_init 失败，需重启后重试");
@@ -79,8 +96,8 @@ lv_display_t *bsp_lvgl_init(void) {
     const lvgl_port_display_cfg_t dc = {
         .panel_handle = bsp_display_panel(),
         .io_handle    = bsp_display_io(),
-        // ⚠ C3 无 PSRAM,DMA 只能用内部 RAM。40 行单缓冲约 19.2KB，
-        // 可减少窗口命令和队列提交次数；仍保留单缓冲，避免双缓冲挤压音频/Wi-Fi。
+        // C3 has no PSRAM. A configurable single DMA buffer balances internal
+        // SRAM against the number of partial transfers; never allocate two.
         .buffer_size   = (uint32_t)BSP_LCD_W * BSP_LVGL_DRAW_BUFFER_LINES,
         .double_buffer = false,
         .hres = BSP_LCD_W, .vres = BSP_LCD_H,
@@ -96,6 +113,7 @@ lv_display_t *bsp_lvgl_init(void) {
         ESP_LOGE(TAG, "LVGL 初始化加锁失败");
         return NULL;
     }
+    lv_tick_set_cb(display_tick_ms);
     lv_display_t *disp = lvgl_port_add_disp(&dc);
     bool mask_registered = false;
     if (disp) {
@@ -129,4 +147,42 @@ bool bsp_lvgl_lock(int timeout_ms) {
 }
 void bsp_lvgl_unlock(void) {
     if (s_disp) lvgl_port_unlock();
+}
+
+esp_err_t bsp_lvgl_set_sleep(bool asleep) {
+    if (!s_disp || !bsp_display_panel()) return ESP_ERR_INVALID_STATE;
+    if (!lvgl_port_lock(1000)) return ESP_ERR_TIMEOUT;
+    esp_err_t err = ESP_OK;
+    if (asleep) {
+        if (!s_refresh_paused) {
+            // Do not use lvgl_port_stop(): LVGL 9.5 returns 1 ms when globally
+            // disabled, making port 2.9.0 busy-poll instead of going idle.
+            lv_timer_pause(lv_display_get_refr_timer(s_disp));
+            s_refresh_paused = true;
+        }
+        if (!s_panel_asleep) {
+            // tx_param drains pending SPI color transfers before its command.
+            err = esp_lcd_panel_disp_on_off(bsp_display_panel(), false);
+            if (err == ESP_OK) err = esp_lcd_panel_disp_sleep(bsp_display_panel(), true);
+            if (err == ESP_OK) s_panel_asleep = true;
+        }
+    } else if (s_refresh_paused || s_panel_asleep) {
+        // Restore the panel even after an incomplete Sleep In attempt. Keep the
+        // refresh paused on failure so a retry cannot draw into a sleeping panel.
+        err = esp_lcd_panel_disp_sleep(bsp_display_panel(), false);
+        if (err == ESP_OK) err = esp_lcd_panel_disp_on_off(bsp_display_panel(), true);
+        if (err != ESP_OK) goto done;
+        s_panel_asleep = false;
+        if (s_refresh_paused) {
+            lv_timer_resume(lv_display_get_refr_timer(s_disp));
+            s_refresh_paused = false;
+            lv_obj_invalidate(lv_display_get_screen_active(s_disp));
+            // The port task can otherwise still be waiting its 500 ms timeout.
+            lvgl_port_task_wake(LVGL_PORT_EVENT_DISPLAY, NULL);
+        }
+    }
+done:
+    lvgl_port_unlock();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Screen %s failed: %s", asleep ? "sleep" : "wake", esp_err_to_name(err));
+    return err;
 }

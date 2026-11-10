@@ -9,6 +9,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "esp_sleep.h"
+#include "esp_attr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "bsp_btn";
@@ -38,6 +40,51 @@ static bsp_adc_button_t s_drivers[BSP_BTN_COUNT];
 static int64_t s_sample_time;
 static int s_sample_mv = -1;
 static bool s_sample_valid;
+static bool s_wake_isr_added;
+static volatile bool s_wake_armed;
+
+static void IRAM_ATTR key_wake_isr(void *arg) {
+    (void)arg;
+    s_wake_armed = false;
+    iot_button_power_save_wakeup_isr(BSP_BTN_GPIO);
+}
+
+static esp_err_t key_exit_power_save(button_driver_t *driver) {
+    (void)driver;
+    gpio_intr_disable(BSP_BTN_GPIO);
+    esp_err_t e = gpio_wakeup_disable(BSP_BTN_GPIO);
+    gpio_set_direction(BSP_BTN_GPIO, GPIO_MODE_DISABLE);
+    s_wake_armed = false;
+    s_sample_valid = false;
+    return e;
+}
+
+static int32_t key_wake_gpio(button_driver_t *driver) {
+    (void)driver;
+    return BSP_BTN_GPIO;
+}
+
+static esp_err_t key_enter_power_save(button_driver_t *driver) {
+    const bsp_adc_button_t *button = (const bsp_adc_button_t *)driver;
+    /* One shared ADC ladder, one interrupt. All three logical drivers must
+     * opt in before the button component stops its polling timer. */
+    if (button->index != 0) return ESP_OK;
+    esp_err_t e = gpio_input_enable(BSP_BTN_GPIO);
+    if (e == ESP_OK) e = gpio_wakeup_enable(BSP_BTN_GPIO, GPIO_INTR_LOW_LEVEL);
+    if (e == ESP_OK) {
+        s_wake_armed = true;
+        e = gpio_intr_enable(BSP_BTN_GPIO);
+    }
+    if (e != ESP_OK) {
+        key_exit_power_save(driver);
+        /* The component stops its timer before this callback: never strand
+         * input if hardware arming fails. Retry on the next idle transition. */
+        iot_button_resume();
+    }
+    return e;
+}
+
+bool bsp_button_idle_wakeup_armed(void) { return s_wake_armed; }
 
 static uint8_t button_level(button_driver_t *driver) {
     if (!s_ready) return BUTTON_INACTIVE;
@@ -93,6 +140,11 @@ static esp_err_t button_cleanup(void) {
     s_user = NULL;
     s_ready = false;
     s_sample_valid = false;
+    if (s_wake_isr_added) {
+        key_exit_power_save(NULL);
+        gpio_isr_handler_remove(BSP_BTN_GPIO);
+        s_wake_isr_added = false;
+    }
 
     for (int i = BSP_BTN_COUNT - 1; i >= 0; i--) {
         if (!s_btn[i]) continue;
@@ -191,9 +243,27 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
         return ae; // No guessed mV: an unavailable reading is not an UP press.
     }
 
+    /* ADC setup disables the digital input. Re-enable it only while idle;
+     * preserve the external 10k pull-up and analog divider thresholds. */
+    esp_err_t wake_result = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    if (wake_result == ESP_OK || wake_result == ESP_ERR_INVALID_STATE) {
+        wake_result = gpio_set_intr_type(BSP_BTN_GPIO, GPIO_INTR_LOW_LEVEL);
+        if (wake_result == ESP_OK) wake_result = esp_sleep_enable_gpio_wakeup();
+        if (wake_result == ESP_OK) {
+            wake_result = gpio_isr_handler_add(BSP_BTN_GPIO, key_wake_isr, NULL);
+            s_wake_isr_added = wake_result == ESP_OK;
+            gpio_intr_disable(BSP_BTN_GPIO);
+        }
+    }
+    if (!s_wake_isr_added) ESP_LOGW(TAG, "Idle GPIO wake unavailable; retain button polling");
+
     for (int i = 0; i < BSP_BTN_COUNT; i++) {
         s_drivers[i] = (bsp_adc_button_t){
-            .base = { .get_key_level = button_level, .del = button_driver_delete },
+            .base = { .get_key_level = button_level, .del = button_driver_delete,
+                .enable_power_save = s_wake_isr_added,
+                .enter_power_save = key_enter_power_save,
+                .exit_power_save = key_exit_power_save,
+                .get_gpio_num = key_wake_gpio },
             .index = (unsigned)i,
         };
         // 判定门限由 BSP 显式下发(见 bsp_pins.h):组件 Kconfig 默认的长按 1500ms 偏迟钝。
@@ -220,6 +290,10 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user) {
 
     s_sample_valid = false;
     s_ready = true;
+    if (s_wake_isr_added && iot_button_resume() != ESP_OK) {
+        button_cleanup();
+        return ESP_FAIL;
+    }
     ESP_LOGI(TAG, "按键就绪:ADC1_CH%d 三键分压,短按 %dms 长按 %dms",
              BSP_BTN_ADC_CHANNEL, BSP_BTN_SHORT_PRESS_MS, BSP_BTN_LONG_PRESS_MS);
     return ESP_OK;

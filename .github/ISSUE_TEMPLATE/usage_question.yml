@@ -1,5 +1,5 @@
 name: Usage question / 使用问题
-description: Ask for help building, flashing, configuring, or using AI Passport.
+description: Ask for help installing, configuring or using Vibe Companion.
 title: "[Question] "
 body:
   - type: markdown
@@ -32,6 +32,12 @@ body:
       placeholder: For example, v1.0.0 or ea9c823
     validations:
       required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Client and platform / 客户端与系统
+      description: App version, macOS version and Apple Silicon/Intel; include Agent version/entry point if relevant.
 
   - type: input
     id: idf

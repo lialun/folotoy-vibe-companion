@@ -1,5 +1,9 @@
 **English** · [简体中文](/docs/README.zh_CN.md)
 
+> **Vibe Companion:** start with the [application overview](../README.md),
+> [setup guide](vibe/README.md) or [design contract](vibe/DESIGN.md).
+> The hardware and engineering baseline below is retained from upstream FoloToy.
+
 <h1 align="center">FoloToy AI PASSPORT</h1>
 
 <p align="center">

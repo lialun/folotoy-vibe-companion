@@ -2,25 +2,24 @@ English | [简体中文](/.github/SUPPORT.zh_CN.md)
 
 # Support
 
-FoloToy AI Passport is open-source hardware and firmware. The community can help
-confirm reproducible issues and discuss improvements, but one-to-one
-troubleshooting for every custom hardware setup or commercial support is not
-guaranteed.
+For Vibe Companion usage and bugs, use this repository's Issues. This is a
+community application based on FoloToy hardware, not FoloToy's official firmware
+support channel.
 
-## Where to start
+- New installation: [device setup](/docs/vibe/README.md) and
+  [Mac installation and permissions](/docs/vibe/install.md).
+- Agent hooks and supported events: [integration guide](/docs/vibe/agents.md).
+- Building or packaging: [developer guide](/docs/vibe/release.md).
+- Interaction and resource rules: [design contract](/docs/vibe/DESIGN.md).
+- Vulnerabilities: [private reporting](/.github/SECURITY.md).
 
-- Hardware facts, wiring, and known traps: read
-  [`README.md`](/docs/README.md) and the
-  [AI Hardware Development Guide](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md).
-- AI agent workflow and engineering rules: read
-  [`AGENTS.md`](/AGENTS.md) and its rule index.
-- Security vulnerabilities, credentials, or exploitable details: follow
-  [`SECURITY.md`](/.github/SECURITY.md) and report privately.
-- Ordinary bugs: open a GitHub issue with the board revision, firmware version,
-  and reproduction steps.
-- Feature requests: use the feature request template and describe the use case
-  and expected outcome.
-- Usage questions: open an issue with the usage question template.
+For a reproducible bug, include the firmware and client versions, device model,
+macOS version and chip, steps, expected and actual results. For an Agent issue,
+include its version and whether you use a terminal, local desktop app, or remote
+session. For a radio issue, provide a public station name/URL and the on-screen
+error; station availability can change independently of a firmware release.
 
-Do not post real user data, access tokens, private keys, or internal addresses
-in public issues, discussions, or logs.
+Relevant screenshots and short sanitized logs help. Do not publish credentials,
+pairing codes/tokens, private network addresses, or conversation contents.
+Search existing Issues before opening a new one. Feature requests should explain
+the use case and intended behavior; individual support is provided as available.

@@ -46,3 +46,11 @@ struct _lv_display_t *bsp_lvgl_init(void);
 // LVGL 尚未就绪或超时时 lock 返回 false；只有 lock 成功后才调用 unlock。
 bool bsp_lvgl_lock(int timeout_ms);
 void bsp_lvgl_unlock(void);
+
+// Reversible screen standby, from a task, never a button/ISR callback. Takes the
+// LVGL lock internally (do not hold an application mutex across this call).
+// Sleep pauses display refresh and sends ST7789 Sleep In; wake resumes refresh
+// without allocating a new screen or DMA buffer. Panel commands
+// can block for ~100 ms. Turn the backlight off before sleep and on after wake.
+// Failed transitions can be retried; deep-sleep GPIO holds are not used here.
+esp_err_t bsp_lvgl_set_sleep(bool asleep);

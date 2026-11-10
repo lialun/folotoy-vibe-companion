@@ -30,6 +30,7 @@ static bool     s_initialized;
 static esp_err_t s_sleep_result;
 static bool     s_codec_release_failed;
 static uint8_t  s_volume;
+static uint8_t  s_input_gain = 30;
 static int      s_io_error;
 
 // esp_codec_dev 1.6.2 discards some control/data interface errors. Remember the
@@ -464,7 +465,7 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     // ⚠ open 之后【不要】手动覆写 ES8311 的时钟分频寄存器(REG01~06):
     //   驱动已按采样率与 MCLK 精确算好,覆写会导致 ADC/DAC 时序错乱、录音回放全是杂音。
     //   这里只设麦克风模拟 PGA 增益。
-    r = esp_codec_dev_set_in_gain(s_dev, 30.0f);
+    r = esp_codec_dev_set_in_gain(s_dev, (float)s_input_gain);
     if (r == ESP_CODEC_DEV_OK) r = esp_codec_dev_set_out_vol(s_dev, s_volume);
     if (r != ESP_CODEC_DEV_OK || s_io_error != ESP_CODEC_DEV_OK) {
         e = ESP_FAIL;
@@ -567,4 +568,15 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
 void bsp_audio_set_volume(uint8_t percent) {
     s_volume = percent > 100 ? 100 : percent;
     if (s_dev && s_opened && !s_sleeping) esp_codec_dev_set_out_vol(s_dev, s_volume);
+}
+
+esp_err_t bsp_audio_set_input_gain(uint8_t db) {
+    if (db > 42) return ESP_ERR_INVALID_ARG;
+    if (s_dev && s_opened && !s_sleeping) {
+        s_io_error = ESP_CODEC_DEV_OK;
+        int result = esp_codec_dev_set_in_gain(s_dev, (float)db);
+        if (result != ESP_CODEC_DEV_OK || s_io_error != ESP_CODEC_DEV_OK) return ESP_FAIL;
+    }
+    s_input_gain = db;
+    return ESP_OK;
 }

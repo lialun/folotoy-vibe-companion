@@ -10,6 +10,25 @@
 
 ## Unreleased
 
+## v0.8.1-vibe-companion - 2026-11-10
+
+Vibe 伴侣首个公开版本，包含 FoloToy AI Passport 配套固件和原生 macOS 客户端。
+
+- 无线按住说话输入及独立回车，番茄钟或收音机运行时仍可使用语音。
+- 接入 Codex、Claude Code、OpenCode、DeepSeek Harness、ZCode、Gemini CLI 和 Qwen Code；紧凑浮窗亮屏响铃，同一会话短时间内重复事件只提醒一次。
+- 手动承接下一阶段的专注／休息轮转、多页天气、亮暗主题与定时切换。
+- 桌面端搜索电台、检测自定义音频流、调整列表和顺序；语音时让出音频通道，结束后恢复连接。
+- 记住多个 Wi-Fi 并自动重连、自动选择空闲通信端口、设备与客户端配置同步。
+- 菜单栏常驻客户端、按需读取的待机／内存诊断、中英文安装说明，以及 Apple Silicon／Intel 通用 DMG 和 ZIP。
+
+Intel 实机、干净系统安装仍待验证。安装包使用 ad-hoc 临时签名，未经 Apple 公证。
+
+## 上游继承记录
+
+以下未发布记录来自官方固件基线，保留供参考，不作为 Vibe 伴侣的发布历史。
+
+### 上游待发布改动
+
 - 加入厂家为优特利 520mAh 电芯生成的 80 字节 CW2017 profile，并实现内容与更新标志检查、写入后校验、规定的重启时序以及有上限的 SOC 就绪等待。
 
 - 扩充环境引导文档：新增乐鑫 Git 服务镜像（`git.espressif.com.cn`）作为中国大陆首选线路，覆盖 ESP-IDF v5.5.3 及其子模块；补充子模块长等待/超时处理、原地修复，以及 `esp32-wifi-lib` 等大仓的按钉死 commit 浅取；提示按仓库残留的 Jihulab `insteadOf` 旧配置；并把官方离线 release 压缩包加入兜底方案（经验来自 `esp-mosaico/esp-mosaico-vibe`）。

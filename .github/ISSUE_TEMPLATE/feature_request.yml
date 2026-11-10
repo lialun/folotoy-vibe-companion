@@ -1,5 +1,5 @@
 name: Feature request / 功能建议
-description: Suggest an improvement to the firmware, BSP, hardware, or documentation.
+description: Suggest an improvement to Vibe Companion firmware, desktop, integrations or documentation.
 title: "[Feature] "
 body:
   - type: markdown
@@ -30,7 +30,9 @@ body:
     attributes:
       label: Affected area / 涉及范围
       options:
-        - Firmware or demo / 固件或示例
+        - Firmware or device UI / 固件或设备界面
+        - Desktop client / 桌面客户端
+        - Agent integrations / Agent 接入
         - BSP or hardware interface / BSP 或硬件接口
         - Documentation or tooling / 文档或工具
         - Hardware revision / 硬件版本

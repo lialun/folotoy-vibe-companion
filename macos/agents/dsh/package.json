@@ -1,0 +1,13 @@
+{
+  "name": "vibe-companion-dsh",
+  "version": "0.7.2",
+  "type": "module",
+  "main": "./index.js",
+  "exports": "./index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

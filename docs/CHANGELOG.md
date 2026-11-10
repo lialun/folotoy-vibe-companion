@@ -12,6 +12,25 @@
 
 ## Unreleased
 
+## v0.8.1-vibe-companion - 2026-11-10
+
+First public Vibe Companion release for FoloToy AI Passport, with a native macOS companion app.
+
+- Wireless hold-to-talk input and a dedicated Enter action, available alongside Pomodoro or radio.
+- Local Agent integrations for Codex, Claude Code, OpenCode, DeepSeek Harness, ZCode, Gemini CLI and Qwen Code, with compact screen and sound alerts and per-session duplicate suppression.
+- Focus/rest phases that wait for the next manual start, multi-page weather, light/dark themes and scheduled theme switching.
+- Desktop station search, custom-stream checks and list ordering; radio yields to voice and reconnects afterwards.
+- Saved Wi-Fi networks with automatic reconnection, automatic available-port discovery and synchronized device settings.
+- Menu-bar app, on-demand standby/heap diagnostics, bilingual setup guides and universal Apple Silicon/Intel DMG and ZIP packages.
+
+Physical Intel and clean-machine installation remain unverified. Packages use ad-hoc signing and are not Apple notarized.
+
+## Inherited upstream notes
+
+The following unreleased notes belong to the official firmware baseline and are retained for context; they are not a Vibe Companion release history.
+
+### Unreleased upstream changes
+
 - Added the supplied 80-byte CW2017 profile for the specified 520 mAh cell, including content/update-flag checks, verified writes, the required restart sequence, and bounded SOC-readiness polling.
 
 - Expanded the environment bootstrap document: added Espressif's Git service mirror (`git.espressif.com.cn`) as the preferred mainland-China route for ESP-IDF v5.5.3 and its submodules, documented submodule long-wait/timeout handling, in-place repair, and the pinned-commit shallow fetch for large submodules such as `esp32-wifi-lib`, warned about stale per-repository Jihulab `insteadOf` residue, and added the official offline release archive as a last-resort fallback (learned from `esp-mosaico/esp-mosaico-vibe`).

@@ -1,0 +1,9 @@
+menu "FoloToy board support"
+    config BSP_LVGL_DRAW_BUFFER_LINES
+        int "LVGL single draw buffer height (lines)"
+        range 10 80
+        default 40
+        help
+            Each line uses 480 bytes of internal DMA-capable RAM. Smaller
+            buffers save SRAM at the cost of more partial display transfers.
+endmenu

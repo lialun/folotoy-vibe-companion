@@ -1,0 +1,40 @@
+name: Bug report / 缺陷反馈
+description: Report a reproducible Vibe Companion firmware, desktop or Agent issue.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Use SECURITY.md for vulnerabilities. Remove credentials, pairing tokens and conversation content.
+        请先搜索已有问题；漏洞按 SECURITY.zh_CN.md 私密报告。移除凭证、配对令牌和对话内容。
+  - type: input
+    id: versions
+    attributes:
+      label: Firmware and client versions / 固件与客户端版本
+      description: Release tag or commit; include both versions when applicable.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment / 使用环境
+      description: Device model, macOS version/chip; for Agents, version and terminal/desktop/remote entry point.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce / 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected and actual result / 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or sanitized logs / 截图或脱敏日志
+      description: For radio, include the public station name/URL and screen error. Never include private URLs.

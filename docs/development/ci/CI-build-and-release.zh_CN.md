@@ -4,16 +4,17 @@
 
 # 自动构建与发布（CI / Build & Release）
 
-本仓库提供一套基于 GitHub Actions 的自动构建与发布流水线，用于在打 tag 时自动编译固件并发布 Release。
+本仓库提供 GitHub Actions 自动构建流水线，构建设备固件和通用 Vibe 伴侣 Mac App。
+标签触发时生成草稿预发布，手动触发只生成 Actions 构建产物。
 
 本文件与 `.github/workflows/build-firmware.yml` 一同维护，工作流行为变化时必须同步更新。
 
 ## 触发条件
 
-- **push tag**：当向仓库推送 tag（如 `v1.0.0`、`v0.1.0-feature/xxx`）时触发自动构建，并在构建成功后自动创建 Release（带固件产物）。
+- **push tag**：推送 `v*-vibe-companion` 格式标签（如 `v0.1.0-vibe-companion`）时触发，所有检查和构建成功后创建包含两端安装包的草稿预发布。
 - **workflow_dispatch**：可在 GitHub Actions 页面手动触发（用于调试/预发布验证）。
 
-> 平时 push 到分支（非 tag）**不会**触发构建；只有打 tag 才会。
+> 普通分支 push 不触发这个工作流，可从 Actions 手动运行。
 
 ## 流水线做了什么
 
@@ -21,13 +22,19 @@
 2. **编译与验证**（ESP-IDF 5.5.3 / esp32c3）：运行与本地相同的 `./tools/validate.sh --firmware`。脚本使用 `sdkconfig.defaults` 和 `partitions.csv` 构建固件，再执行 `idf.py merge-bin`。
 3. **验证完整固件**：脚本按 `flash_args` 生成的实际偏移逐字节确认 bootloader、partition-table 和 app，确认使用 8 MB Flash，并检查当前配置的分区布局，最后输出 `build/FoloToy-AI-Passport-full.bin`。仓库默认偏移为 `0x0`、`0x8000` 和 `0x10000`；用户自定义分区表时可以改变 app 偏移。
 4. **上传 artifact**：每次成功构建都上传 `FoloToy-AI-Passport-full.bin`。普通分支只有从该分支手动运行 `workflow_dispatch` 才会构建；普通 push 不触发。
-5. **发布 tag**：tag 构建完成后，独立 release job 下载上述 artifact，并创建 GitHub Release。
+5. **主机检查**：独立 checks job 运行 `./tools/validate.sh --static`，检查仓库、工作流与主机逻辑。
+6. **Mac App**：运行 `bash macos/build.sh`，执行 C／Swift 协议测试，构建 arm64／x86_64 通用 App，临时签名并生成 DMG 和 ZIP。
+7. **标签草稿**：前三类检查／构建全部通过后，独立 release job 下载产物，生成双语安装／发布说明及所有文件的校验值，创建草稿预发布。默认使用免费 ad-hoc 签名，不使用付费 Apple 账号或 Apple 密钥，也未经 Apple 公证。
 
 构建 job 只有 `contents: read` 权限；仅 release job 在 tag 发布时获得 `contents: write`。所有 Action 均固定到完整 commit SHA，行尾注释保留对应发布版本，升级时需同时核对 SHA 与版本。
 
 ## 产物
 
-- `FoloToy-AI-Passport-full.bin`：合并后的完整固件，可直接烧录（唯一产物）。
+- `FoloToy-AI-Passport-full.bin`：合并固件，从 `0x0` 写入。
+- 通用 Mac DMG 和 ZIP，支持 Apple Silicon／Intel。
+- 双语安装说明、第三方许可和 SHA-256 校验值。
+
+完整附件清单与免费分发步骤见 [Vibe 发布准备](../../vibe/release.zh_CN.md)。
 
 ## 在线烧录
 
@@ -84,3 +91,8 @@ tag 触发的 Release 只有在合并固件与它的 Release 说明一起发布�
 
 - `.github/workflows/build-firmware.yml`：本流水线定义。
 - 详见 `docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md`（硬件/烧录细节）。
+
+## 桌面端 PR 检查
+
+`.github/workflows/macos-checks.yml` 独立验证涉及桌面端的 PR、匹配的 `main` 推送和手动触发。
+它运行通用构建、原生协议／Agent 测试、签名检查和 DMG 校验，仓库权限只读，不创建发布。

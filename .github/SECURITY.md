@@ -1,52 +1,34 @@
 English | [简体中文](/.github/SECURITY.zh_CN.md)
 
-# Security Policy
+# Security policy
 
-Do not disclose unpatched security vulnerabilities, credentials, tokens, or
-directly exploitable details in public issues, pull requests, discussions, or
-chat.
+This policy covers Vibe Companion firmware, the desktop client, LAN pairing and
+transport, Agent adapters, and release tooling. This is a community project;
+FoloToy's upstream maintainers do not operate its reporting channel.
 
 ## Reporting a vulnerability
 
-The preferred channel is GitHub's private vulnerability reporting form:
+Use **Security → Report a vulnerability** in this repository if private
+vulnerability reporting is enabled. If that option is unavailable, open an
+Issue requesting a private contact, with no vulnerability details, credentials,
+or exploit steps. Wait for a project maintainer to provide a private channel.
 
-<https://github.com/FoloToy/ai-passport/security/advisories/new>
+Include the affected release/commit and platform, reproduction steps, impact,
+and suggested mitigation in the private report. Remove Wi-Fi passwords, pairing
+and hook tokens, conversation contents, and personal data from attachments.
+Do not post an unpatched vulnerability in public Issues or pull requests.
 
-If that form is unavailable, open a public issue containing only a request for a
-private security contact. Do not include vulnerability details or reproduction
-materials in that issue; wait for a maintainer to provide a private channel.
+The maintainer will review reports and coordinate disclosure as capacity allows;
+this project does not promise a fixed response SLA. Bugs in separately installed
+software or external services belong with their maintainers.
 
-## What to include
+## Deployment context
 
-Please provide as much of the following as possible:
+The companion is designed for a trusted local network. A pairing token restricts
+control, but the current LAN protocol is not encrypted transport. Pairing and
+local Agent endpoint files use account-private permissions, not Keychain;
+programs running as the same account may be able to read them.
 
-- affected version, commit, or distribution channel;
-- affected board, component, and configuration;
-- reproduction steps, a minimal PoC, or logs, after removing credentials and
-  personal data;
-- potential impact, exploitation requirements, and any suggested mitigation.
-
-This repository contains firmware for a wearable AI device. Security issues may
-involve the ESP32-C3 firmware, the audio input, wireless capabilities, or
-protocol handling. If the issue also involves a separately maintained server or
-service, identify the affected endpoint and client version so that we can route
-it to the appropriate maintainers.
-
-## Response process
-
-We will acknowledge the report, reproduce it, assess its impact, and update the
-report when a fix or mitigation can be disclosed. Our target cadence:
-**acknowledgement with an initial assessment within 5 business days**, and a
-**90-day coordinated disclosure window** for confirmed vulnerabilities
-(adjustable in coordination with the reporter). If you hear nothing for more
-than 7 days, please ping us through the other channel (email or GitHub).
-
-## Contributor notes
-
-- Do not put real user data, access tokens, private keys, or internal endpoints
-  in issues, test fixtures, or commits.
-- If you accidentally commit sensitive information, report it privately
-  immediately. Deleting the file from the working tree does not invalidate
-  secrets that may exist in Git history.
-- Use public issues for ordinary bugs, documentation problems, and feature
-  requests. Do not use the security channel for those topics.
+GitHub packages use ad-hoc signing and are not Apple notarized. Compare downloads
+with release checksums and use the per-app approval steps in the
+[installation guide](/docs/vibe/install.md).

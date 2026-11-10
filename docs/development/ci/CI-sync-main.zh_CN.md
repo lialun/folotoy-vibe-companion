@@ -2,32 +2,20 @@
   <strong>简体中文</strong> · <a href="CI-sync-main.md">English</a>
 </p>
 
-# 上游同步（CI / Upstream Sync）
+# 上游同步
 
-本仓库提供一套基于 GitHub Actions 的自动上游同步流水线，用于定期把上游 `FoloToy/ai-passport` 的 `main` 分支更新同步到本 fork 的 `main` 分支。
+`.github/workflows/sync-main.yml` 用于把 fork 的 `main` 与 `FoloToy/ai-passport:main`
+同步。本应用分支已关闭定时同步，仅允许手动触发；非 fork 仓库自动跳过。
+本文件与工作流一同维护。
 
-本文件与 `.github/workflows/sync-main.yml` 一同维护，工作流行为变化时必须同步更新。
+工作流不保存检出凭证，使用固定完整 SHA 的同步 Action。自动生成的 `GITHUB_TOKEN`
+拥有 `contents: write`，无需自行配置令牌。若上游工作流变化导致同步失败，检查 Actions
+日志，必要时使用 GitHub 的 **Sync fork**。
 
-## 触发条件
+应用代码和文档应保存在应用分支，硬件基线的 `main` 才用于上游同步。如果应用开发
+直接使用 `main`，手动运行前必须检查拟合并的上游改动，不得用同步覆盖应用工作。
+fork 所有者需要自行开启 Actions。
 
-- **schedule**：每天 00:00（UTC）自动运行一次。
-- **workflow_dispatch**：可在 GitHub Actions 页面手动触发（用于立即同步/排查问题）。
-
-> 该工作流仅在仓库为 **fork** 时生效（`if: github.event.repository.fork`）；非 fork 仓库不运行。
-
-## 流水线做了什么
-
-1. **Checkout 目标仓库**：`actions/checkout` 显式设置 `ref: main`，即使手动触发选择其他分支，也检出当前 fork 的 `main`，并关闭 Git 凭证持久化。同步 Action 在 fetch 前需要本地 `main`；否则 `git checkout main` 可能把仓库内的 `main/` 目录作为路径处理，并未切换分支。
-2. **同步上游**：使用固定到完整 commit SHA 的 `aormsby/fork-sync-with-upstream-action`（对应 v3.4.3），把 `FoloToy/ai-passport` 的 `main` 同步到本 fork 的 `main`。`target_repo_token` 使用自动生成且仅具 `contents: write` 权限的 `GITHUB_TOKEN`，无需手动配置。
-3. **失败检查**：同步失败时输出提示——上游 workflow 文件变更可能导致 GitHub 暂停自动同步，需手动 Sync Fork 一次。
-
-## 注意事项
-
-- 同步目标与上游分支均为 `main`，与 fork 用户约定（`main` 仅允许修改根目录 `README.md` 与 `docs/assets/`）配合使用：`main` 保持与上游最新基线同步、不产生冲突。
-- **在 `main` 直接开发的例外**：如果用户执意要在 `main` 分支直接开发，必须**停用/关闭本 workflow**（Actions 页面 → Disable），否则每日自动同步会把上游改动强行合入 `main`，产生冲突或覆盖本地开发内容。
-- 若同步失败，查看 Actions 日志确认是否为上游 workflow 文件变更所致；必要时按提示手动在 GitHub 页面 Sync Fork。
-- 升级 Action 时必须从官方仓库核对目标版本对应的完整 commit SHA，并同步更新 workflow 行尾的版本注释。
-
-## 相关文件
-
-- `.github/workflows/sync-main.yml`：本流水线定义。
+检出明确指定 `ref: main`，即使手动触发时选了其他分支也不改变目标。该 Action 依赖
+本地 `main` 分支，否则 `git checkout main` 可能把仓库中的 `main/` 目录解释为路径。
+升级 Action 时，核对其官方版本与完整提交 SHA，并同步修改版本注释。

@@ -1,18 +1,19 @@
-[English](/.github/SUPPORT.md) | 简体中文
+简体中文 | [English](/.github/SUPPORT.md)
 
-# 使用支持
+# 获取帮助
 
-FoloToy AI Passport 是开源硬件与固件。社区可以帮助确认可复现的问题和改进方向，
-但不承诺为每个自定义硬件环境提供一对一排障或商业服务支持。
+Vibe 伴侣的使用和缺陷请在本仓库 Issues 反馈。这是基于 FoloToy 硬件的社区应用，
+不是 FoloToy 官方固件支持渠道。
 
-## 先查什么
+- 首次安装：[设备配置](/docs/vibe/README.zh_CN.md)、[Mac 安装与授权](/docs/vibe/install.zh_CN.md)。
+- Agent Hook 与事件覆盖：[接入指南](/docs/vibe/agents.zh_CN.md)。
+- 构建和打包：[开发指南](/docs/vibe/release.zh_CN.md)。
+- 交互与资源约定：[设计规范](/docs/vibe/DESIGN.zh_CN.md)。
+- 安全漏洞：[私密报告](/.github/SECURITY.zh_CN.md)。
 
-- 硬件事实、接线和已知陷阱：先看 [`README.zh_CN.md`](/docs/README.zh_CN.md) 和
-  [AI 硬件开发指南](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md)。
-- AI agent 工作流和工程规则：先看 [`AGENTS.zh_CN.md`](/AGENTS.zh_CN.md) 及其规则索引。
-- 安全漏洞、凭证或可利用细节：按照 [`SECURITY.zh_CN.md`](/.github/SECURITY.zh_CN.md) 私下报告。
-- 普通 Bug：提交 GitHub issue，并提供板卡版本、固件版本和复现步骤。
-- 功能建议：提交 feature request，说明使用场景和期望结果。
-- 使用问题：用「Usage question / 使用问题」issue 模板提问。
+可复现缺陷请提供固件和客户端版本、设备型号、macOS 版本与芯片、复现步骤、预期和
+实际结果。Agent 问题补充其版本，以及使用终端、本地桌面端还是远程会话。收音机问题
+提供公开电台名／地址及屏幕错误；电台源可能独立于固件版本发生变化。
 
-请不要在公开 issue、讨论或日志中提交真实用户数据、访问令牌、私钥或内部地址。
+相关截图和简短脱敏日志有助排查。不要公开凭证、配对码／令牌、内网地址或对话内容。
+提问前先搜索已有 Issues。功能建议说明使用场景和预期行为，维护者按实际能力提供帮助。

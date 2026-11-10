@@ -233,7 +233,7 @@ void esp_codec_dev_delete(esp_codec_dev_handle_t dev) {
     free(dev);
 }
 int esp_codec_dev_set_in_gain(esp_codec_dev_handle_t dev, float gain) {
-    assert(gain == 30.0f);
+    assert(gain >= 0.0f && gain <= 42.0f);
     (void)codec_write((struct test_codec *)dev->codec, 0x16, 0x0a);
     return ESP_OK;
 }
@@ -292,6 +292,17 @@ int main(void) {
     assert(codec_creations == created + 1 && ctrl_creations == controls && ctrl_deletions == deleted);
     assert(tx_channel.hz == 8000 && registers[0x32] == 43);
     assert_active();
+
+    fresh();
+    assert(bsp_audio_set_input_gain(43) == ESP_ERR_INVALID_ARG);
+    assert(bsp_audio_set_input_gain(20) == ESP_OK);
+    assert(bsp_audio_set_format(16000, 16, 1) == ESP_OK);
+    assert(s_input_gain == 20);
+    assert(bsp_audio_sleep() == ESP_OK);
+    assert(bsp_audio_wake() == ESP_OK && s_input_gain == 20);
+    fault(0x16, 0x0a, 1);
+    assert(bsp_audio_set_input_gain(25) == ESP_FAIL && s_input_gain == 20);
+    assert(bsp_audio_set_input_gain(30) == ESP_OK);
 
     fresh();
     unsigned starts = codec_starts;

@@ -1,9 +1,9 @@
-name: Build firmware
+name: Build Vibe Companion
 
 on:
   push:
     tags:
-      - "**"
+      - "v*-vibe-companion"
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Validate repository, workflows and host logic
+        run: ./tools/validate.sh --static
+
   build:
     runs-on: ubuntu-latest
     outputs:
@@ -44,29 +51,71 @@ jobs:
         id: artifact_name
         run: echo "name=passport-${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
 
+      - name: Package redistribution notices
+        run: python3 tools/package_notices.py build/THIRD_PARTY_NOTICES.txt
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact_name.outputs.name }}
-          path: build/FoloToy-AI-Passport-full.bin
+          path: |
+            build/FoloToy-AI-Passport-full.bin
+            build/THIRD_PARTY_NOTICES.txt
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build universal Mac app and test native protocol
+        run: bash macos/build.sh
+      - name: Upload Mac app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vibe-macos
+          path: |
+            build/macos/VibeCompanion-*-macOS.dmg
+            build/macos/VibeCompanion-*-macOS.zip
+            build/macos/SHA256SUMS.txt
           if-no-files-found: error
 
   release:
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [checks, build, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
       - name: Download firmware artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.build.outputs.artifact_name }}
           path: release
 
-      - name: Create release (tag push)
+      - name: Download Mac artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: vibe-macos
+          path: release
+
+      - name: Prepare installation guides, release notes and all file checksums
+        run: python3 tools/package_release.py release
+
+      - name: Create draft release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: "${{ github.ref_name }}"
-          files: release/FoloToy-AI-Passport-full.bin
+          draft: true
+          prerelease: true
+          body_path: release/RELEASE_NOTES.md
+          files: |
+            release/FoloToy-AI-Passport-full.bin
+            release/VibeCompanion-*-macOS.dmg
+            release/VibeCompanion-*-macOS.zip
+            release/SHA256SUMS.txt
+            release/THIRD_PARTY_NOTICES.txt
+            release/INSTALL.txt
+            release/INSTALL.zh_CN.txt
           fail_on_unmatched_files: true

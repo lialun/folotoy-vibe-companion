@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vibe 伴侣 · 连接 Wi-Fi</title>
+<style>
+:root{color-scheme:light;--ink:#24473f;--muted:#6b7c73;--green:#24765e;--paper:#f1f0e8}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:460px;margin:auto;padding:40px 22px 28px}.brand{font-size:12px;letter-spacing:2px;color:var(--muted);font-weight:600}
+h1{font-size:30px;letter-spacing:-1px;margin:14px 0 10px}p{line-height:1.65;margin:8px 0 22px;color:var(--muted)}
+.card{background:#fffef9;border:1px solid #dfe4d8;border-radius:22px;padding:22px;box-shadow:0 8px 28px #24473f08}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}label{display:block;font-size:14px;font-weight:600;margin:0 0 9px}
+input,select,button{font:inherit}input,select{width:100%;border:1px solid #cbd5c9;border-radius:12px;padding:14px;background:white;color:var(--ink);min-height:50px}
+input:focus,select:focus{outline:2px solid #81b29a;outline-offset:2px}input{margin-bottom:20px}select{margin-bottom:12px}
+button{cursor:pointer;border:0;border-radius:12px;padding:14px 16px;min-height:48px}.primary{width:100%;background:var(--green);color:white;font-weight:600}
+button:disabled{opacity:.55;cursor:default}.text-button{padding:0;min-height:24px;color:var(--green);background:none;font-size:14px}
+.password{position:relative}.password input{padding-right:65px}.password button{position:absolute;right:12px;top:14px}
+#savedCredential{font-size:14px;margin:4px 0 22px;color:var(--muted)}#savedCredential .row{margin-top:12px;justify-content:flex-start;gap:20px}
+#status{font-size:14px;margin:18px 2px 0;padding:14px;background:#e7ecdf;border-radius:12px;line-height:1.6;white-space:pre-line}
+#status.error{background:#f7e5dc;color:#8f4632}.footnote{font-size:13px;margin:22px 4px 0}.badge{display:inline-block;border-radius:8px;background:#e7ecdf;padding:4px 8px;font-size:12px;margin-bottom:18px}
+[hidden]{display:none!important}
+</style>
+<main>
+  <div class="brand">VIBE COMPANION</div>
+  <h1>连接你的 Wi-Fi</h1>
+  <p>只需设置网络。其他功能，稍后在电脑端调整。</p>
+  <section class="card">
+    <div class="badge">支持 2.4 GHz Wi-Fi</div>
+    <form id="form">
+      <div class="row"><label for="network">Wi-Fi 名称</label><button id="rescan" type="button" class="text-button">刷新</button></div>
+      <select id="network" required><option value="" disabled selected>正在搜索附近的 Wi-Fi…</option></select>
+      <input id="ssid" placeholder="输入 Wi-Fi 名称" maxlength="32" autocomplete="off" aria-label="手动输入 Wi-Fi 名称" hidden>
+      <div id="savedCredential" hidden>使用已保存的密码
+        <div class="row"><button id="changePassword" type="button" class="text-button">修改密码</button><button id="forget" type="button" class="text-button">忘记网络</button></div>
+      </div>
+      <div id="passwordFields"><label for="password">Wi-Fi 密码</label>
+      <div class="password"><input id="password" type="password" maxlength="63" autocomplete="off" placeholder="输入 Wi-Fi 的密码"><button id="show" type="button" class="text-button">显示</button></div></div>
+      <button id="connect" class="primary">连接 Wi-Fi</button>
+    </form>
+    <div id="status" role="status" aria-live="polite">正在查找附近的网络…</div>
+  </section>
+  <p class="footnote">手机提示“无法访问互联网”时，请保持连接。设备会自动连接已保存的 Wi-Fi，热点本身无需密码。</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let polling=false,scanBusy=false,submitting=false,completed=false,savedRows=[],savedCapacity=5,changingPassword=false;
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error)}
+function busy(value){for(const id of ['network','ssid','password','connect','rescan','changePassword','forget'])$(id).disabled=value}
+function complete(){completed=true;busy(true);$('show').disabled=true;$('connect').textContent='已连接';status('Wi-Fi 已连接，配网页面即将关闭。');setTimeout(()=>window.close(),500)}
+function manual(){
+  const option=$('network').selectedOptions[0];const yes=!!option?.dataset.manual;
+  $('ssid').hidden=!yes;$('ssid').required=yes;$('network').required=!yes;
+  const saved=!!option?.dataset.saved;
+  $('savedCredential').hidden=!saved;$('passwordFields').hidden=saved&&!changingPassword;
+  $('password').required=false;$('changePassword').textContent=changingPassword?'使用已保存密码':'修改密码';
+}
+async function request(path,body){
+  const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Vibe-Setup':'1'},body:JSON.stringify(body)};
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),12000);
+  try{
+    const response=await fetch(path,{...options,cache:'no-store',signal:controller.signal});
+    if(!response.ok){
+      const body=await response.json().catch(()=>({}));
+      throw Object.assign(Error('设备暂时未能处理请求，请重试。'),{code:body.error});
+    }
+    return await response.json();
+  }finally{clearTimeout(timeout)}
+}
+async function scan(){
+  if(scanBusy||polling||completed)return;scanBusy=true;$('rescan').disabled=true;
+  status('正在查找附近的网络…');
+  const previous=$('network').value;
+  try{
+    const [savedResult,scanResult]=await Promise.allSettled([request('/saved'),request('/scan')]);
+    if(savedResult.status==='fulfilled'){
+      savedRows=savedResult.value.networks||[];savedCapacity=savedResult.value.capacity||5;
+    }
+    const rows=scanResult.status==='fulfilled'&&Array.isArray(scanResult.value)?scanResult.value:[];
+    const scanFailed=scanResult.status==='rejected'||!Array.isArray(scanResult.value);
+    const selectedSSID=previous||savedRows.find(row=>row.connected)?.ssid||savedRows.find(row=>row.preferred)?.ssid;
+    const seen=new Set();$('network').replaceChildren();
+    const placeholder=new Option('选择你的 Wi-Fi','');placeholder.disabled=true;placeholder.selected=true;$('network').add(placeholder);
+    const known=document.createElement('optgroup');known.label='已保存的 Wi-Fi';
+    for(const row of savedRows){
+      const option=new Option(row.ssid+(row.connected?' · 当前连接':''),row.ssid);option.dataset.saved='1';known.append(option);seen.add(row.ssid);
+      if(row.ssid===selectedSSID)option.selected=true;
+    }
+    if(savedRows.length)$('network').append(known);
+    const nearby=document.createElement('optgroup');nearby.label='附近的 Wi-Fi';
+    for(const row of rows.sort((a,b)=>b.rssi-a.rssi)){
+      if(!row.ssid||seen.has(row.ssid))continue;seen.add(row.ssid);
+      const option=new Option(row.ssid,row.ssid);nearby.append(option);
+      if(row.ssid===previous)option.selected=true;
+    }
+    if(nearby.children.length)$('network').append(nearby);
+    const custom=new Option('手动输入 Wi-Fi 名称','');custom.dataset.manual='1';$('network').add(custom);
+    if(!seen.size)custom.selected=true;
+    if(scanFailed){
+      const code=scanResult.reason?.code;
+      status(code==='scan_busy'?'设备正在连接 Wi-Fi，请稍后点刷新重试。':code==='scan_memory'?'暂时没有足够空间扫描，请稍后点刷新重试。':'附近网络扫描失败，请点刷新重试，或手动输入名称。',true);
+    }else if(!rows.length)status('未找到附近的 2.4 GHz 网络，请点刷新重试，或手动输入名称。');
+    else if(savedResult.status==='rejected')status('已列出附近网络，已保存列表读取失败，请刷新重试。',true);
+    else status(savedRows.length?'已保存的 Wi-Fi 无需再次输入密码。':'选择 Wi-Fi，再输入密码。');
+  }catch{
+    $('network').replaceChildren();const custom=new Option('手动输入 Wi-Fi 名称','');custom.dataset.manual='1';$('network').add(custom);
+    status('暂时未能搜索网络，可以手动输入名称。');
+  }finally{scanBusy=false;$('rescan').disabled=false;changingPassword=false;manual()}
+}
+async function poll(){
+  if(polling)return;polling=true;busy(true);const deadline=Date.now()+35000;
+  try{
+    while(Date.now()<deadline){
+      try{
+        const state=await request('/status');
+        if(state.connected){complete();return}
+        if(state.failed)throw Object.assign(Error(state.message||'连接失败，请检查名称和密码。'),{deviceFailure:true});
+        status(state.message||'正在连接，请稍等…');
+      }catch(error){if(error.deviceFailure)throw error;status('等待设备连接，请保持手机连接设备热点…')}
+      await delay(1000);
+    }
+    throw Error('等待连接超时。请确认仍连接着设备热点，然后重试。');
+  }catch(error){status(error.message,true)}finally{polling=false;if(!completed)busy(false)}
+}
+$('network').onchange=()=>{changingPassword=false;$('password').value='';manual()};$('rescan').onclick=scan;
+$('changePassword').onclick=()=>{changingPassword=!changingPassword;$('password').value='';manual();if(changingPassword)$('password').focus()};
+$('forget').onclick=async()=>{
+  if(polling||scanBusy||submitting||completed||!$('network').selectedOptions[0]?.dataset.saved)return;
+  const ssid=$('network').value;if(!confirm('忘记这个 Wi-Fi？以后需要重新输入密码。'))return;
+  submitting=true;busy(true);
+  try{await request('/forget',{ssid});await scan()}catch(error){status(error.message,true)}
+  finally{submitting=false;busy(false)}
+};
+$('show').onclick=()=>{const visible=$('password').type==='password';$('password').type=visible?'text':'password';$('show').textContent=visible?'隐藏':'显示'};
+$('form').onsubmit=async event=>{
+  event.preventDefault();if(polling||scanBusy||submitting||completed)return;
+  const selected=$('network').selectedOptions[0];const ssid=selected?.dataset.manual?$('ssid').value:$('network').value;
+  const password=$('password').value;
+  const useSaved=!!selected?.dataset.saved&&!changingPassword;
+  if(!ssid||new TextEncoder().encode(ssid).length>32){status('请填写有效的 Wi-Fi 名称。',true);return}
+  const bytes=new TextEncoder().encode(password).length;
+  if(!useSaved&&((bytes&&bytes<8)||bytes>63)){status('Wi-Fi 密码应为 8 至 63 个字节；开放网络可留空。',true);return}
+  if(!savedRows.some(row=>row.ssid===ssid)&&savedRows.length>=savedCapacity){status('最多保存 '+savedCapacity+' 个 Wi-Fi，请先忘记一个旧网络。',true);return}
+  submitting=true;busy(true);status('正在连接，请稍等…');
+  try{await request('/save',useSaved?{ssid,useSaved:true}:{ssid,password});$('password').value='';await poll()}
+  catch(error){status(error.message,true);busy(false)}finally{submitting=false}
+};
+(async()=>{
+  try{const state=await request('/status');if(state.connected){complete();return}if(state.connecting){await poll();if(completed)return}}catch{}
+  await scan();
+})();
+</script>
+</html>

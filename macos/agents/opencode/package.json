@@ -1,0 +1,12 @@
+{
+  "name": "vibe-companion-opencode",
+  "version": "0.7.2",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.2.5"
+  },
+  "license": "MIT"
+}
