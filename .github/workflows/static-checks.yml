@@ -27,4 +27,18 @@ jobs:
           echo "ACTIONLINT_BIN=${actionlint_bin}" >> "$GITHUB_ENV"
 
       - name: Validate repository and run host tests
-        run: ./tools/validate.sh --static
+        run: |
+          set -o pipefail
+          ./tools/validate.sh --static 2>&1 | tee "$RUNNER_TEMP/host-checks.log"
+
+      - name: Summarize failed validation
+        if: failure()
+        run: |
+          if [[ -f "$RUNNER_TEMP/host-checks.log" ]]; then
+            {
+              echo '### Repository and host validation failure'
+              echo '```text'
+              tail -n 80 "$RUNNER_TEMP/host-checks.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
