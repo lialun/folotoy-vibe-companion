@@ -4,11 +4,11 @@
 
 # Automated Build and Release
 
-`.github/workflows/build-firmware.yml` builds firmware and the universal Vibe Companion Mac app for `v*-vibe-companion` tags and manual dispatch. Ordinary branch pushes do not trigger it. Manual runs only upload Actions artifacts; tags create a draft prerelease. Keep this page synchronized with the workflow.
+`.github/workflows/build-firmware.yml` builds firmware and the universal Vibe Companion Mac app for `v*-vibe-companion` tags and manual dispatch. Ordinary branch pushes do not trigger it. Manual branch runs only upload Actions artifacts; pushing a release tag publishes a release after all validation jobs pass. Review files and obtain publishing authorization before pushing a tag. Keep this page synchronized with the workflow.
 
 The checks job runs `./tools/validate.sh --static`. The build job restores ccache, runs `./tools/validate.sh --firmware` with ESP-IDF 5.5.3 for ESP32-C3, verifies the bootloader, partition table, and application at the offsets generated in `flash_args`, checks the 8 MB Flash arguments and configured partition layout, then uploads `FoloToy-AI-Passport-full.bin`. The repository default places these images at `0x0`, `0x8000`, and `0x10000`; user-defined partition tables may change the application offset.
 
-The Mac job runs `bash macos/build.sh`, including C/Swift protocol tests, universal arm64/x86_64 compilation, ad-hoc signing, and DMG/ZIP packaging. It needs no paid Apple account or Apple secrets. Only after all three jobs pass does the release job prepare bilingual installation/release notes, checksums and a draft with both packages. Free ad-hoc distribution is the default; the app is not Apple notarized. See [Vibe release preparation](../../vibe/release.md) for the exact asset list and user instructions.
+The Mac job runs `bash macos/build.sh`, including C/Swift protocol tests, universal arm64/x86_64 compilation, ad-hoc signing, and DMG/ZIP packaging. It needs no paid Apple account or Apple secrets. Only after all three jobs pass does the release job prepare bilingual installation/release notes, checksums and publish both packages. Free ad-hoc distribution is the default; the app is not Apple notarized. See [Vibe release preparation](../../vibe/release.md) for the exact asset list and user instructions.
 
 All Actions are pinned to full commit SHAs. The build job has `contents: read`; only the tag release job receives `contents: write`.
 
