@@ -9,10 +9,15 @@
 
 ### 安装固件
 
-使用**同一 GitHub Release** 中配套的固件和桌面 App。目标硬件为 FoloToy AI Passport：
-ESP32-C3、8 MB Flash、240 × 320 彩屏，不适用于任意 ESP32 开发板。
+目标硬件为 FoloToy AI Passport：ESP32-C3、8 MB Flash、240 × 320 彩屏，
+不适用于任意 ESP32 开发板。
 
-设备开机后通过 USB 数据线连接电脑，用支持 Web Serial 的浏览器打开
+**推荐在线安装：**设备开机后通过 USB 数据线连接电脑，用支持 Web Serial 的浏览器打开
+[Vibe 伴侣玩法页](https://ai-passport.folotoy.cn/plays/2174/)，按页面指引直接安装固件。
+桌面 App 从 [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest)
+下载，选择与固件配套的版本。
+
+**手动安装本地固件：**也可以从同一 GitHub Release 下载配套固件和 App。打开
 [FoloToy 官方刷机工具](https://ai-passport.folotoy.cn/tools/web-flasher/)，选择**安装本地固件**，
 使用下载的 `FoloToy-AI-Passport-full.bin`。合并固件从 **`0x0`** 写入。全新安装替换原固件，
 可能重置已有设置，不能把应用分区单独的镜像写到 `0x0`。

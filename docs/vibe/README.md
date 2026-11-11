@@ -10,12 +10,17 @@ covers the device; [Mac installation](install.md) covers the companion and
 
 ### Install firmware
 
-Use the firmware and desktop app from the **same GitHub Release**. The hardware
-is FoloToy AI Passport: ESP32-C3, 8 MB Flash, 240 × 320 color screen. This image
+The hardware is FoloToy AI Passport: ESP32-C3, 8 MB Flash, 240 × 320 color screen. This image
 is not intended for arbitrary ESP32 boards.
 
-Connect the powered device with a USB data cable. In a browser supporting Web
-Serial, open the [official FoloToy flasher](https://ai-passport.folotoy.cn/tools/web-flasher/)
+**Recommended: install online.** Connect the powered device to your computer with
+a USB data cable. In a browser supporting Web Serial, open the
+[Vibe Companion play page](https://ai-passport.folotoy.cn/en/plays/2174/) and follow
+its instructions to install the firmware directly. Download the matching desktop
+app from [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest).
+
+**Manual local installation:** alternatively, download the firmware and app from
+the **same GitHub Release**. Open the [official FoloToy flasher](https://ai-passport.folotoy.cn/tools/web-flasher/)
 and choose **local firmware**. Select the downloaded
 `FoloToy-AI-Passport-full.bin`; the merged image is written from **`0x0`**.
 A full installation replaces the old firmware and can reset saved settings.

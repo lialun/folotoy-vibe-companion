@@ -13,7 +13,8 @@ Windows is not supported yet.**
 
 ![Vibe Companion: wireless voice input, focus timer and Agent alerts](assets/brand/vibe-companion-hero.png)
 
-[Download](https://github.com/lialun/folotoy-vibe-companion/releases/latest) · [Get started](docs/vibe/README.md) · [Install the desktop app](docs/vibe/install.md) ·
+[Install firmware](https://ai-passport.folotoy.cn/en/plays/2174/) · [Download the Mac app](https://github.com/lialun/folotoy-vibe-companion/releases/latest) ·
+[User guide](docs/vibe/README.md) · [Mac installation](docs/vibe/install.md) ·
 [Agent integrations](docs/vibe/agents.md) · [Design](docs/vibe/DESIGN.md)
 
 ## What it does
@@ -61,9 +62,12 @@ network. The app is a **universal binary for Apple Silicon and Intel**. Voice in
 also requires [BlackHole 2ch](https://existential.audio/blackhole/) and
 [WeType](https://z.weixin.qq.com/) or another compatible hold-to-talk input method.
 
-1. **Install the matching firmware and app** from this repository's GitHub
-   Releases. Flash the merged firmware at `0x0` and place the app in Applications.
-   Follow the [setup guide](docs/vibe/README.md) before flashing.
+1. **Install the firmware and app.** Connect the device to your computer with a
+   USB data cable, open the [FoloToy play page](https://ai-passport.folotoy.cn/en/plays/2174/),
+   and follow its instructions to install the firmware directly. Download the
+   matching Mac app from [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest)
+   and move it to Applications. See the [user guide](docs/vibe/README.md) for
+   detailed setup and button controls.
 2. **Connect the device to Wi-Fi.** Join its setup hotspot with your phone and
    select a 2.4 GHz network. It remembers up to five networks and reconnects
    automatically when you move between them.

@@ -12,7 +12,8 @@
 
 ![Vibe 伴侣：无线语音输入、专注计时与 Agent 提醒](assets/brand/vibe-companion-hero.png)
 
-[下载安装包](https://github.com/lialun/folotoy-vibe-companion/releases/latest) · [开始使用](docs/vibe/README.zh_CN.md) · [安装桌面端](docs/vibe/install.zh_CN.md) ·
+[安装固件](https://ai-passport.folotoy.cn/plays/2174/) · [下载 Mac 客户端](https://github.com/lialun/folotoy-vibe-companion/releases/latest) ·
+[使用指南](docs/vibe/README.zh_CN.md) · [Mac 安装说明](docs/vibe/install.zh_CN.md) ·
 [接入 Agent](docs/vibe/agents.zh_CN.md) · [设计规范](docs/vibe/DESIGN.zh_CN.md)
 
 ## 能做什么
@@ -57,9 +58,11 @@ Mac 安装包同时支持 **Apple Silicon 和 Intel**。语音输入另需安装
 [BlackHole 2ch](https://existential.audio/blackhole/) 和
 [微信输入法](https://z.weixin.qq.com/)，或其他兼容的“按住说话”输入法。
 
-1. **安装配套固件和 App。** 从本仓库 GitHub Releases 选择同一版本，
-   合并固件从 `0x0` 写入，App 拖入“应用程序”。刷机前先阅读
-   [设备安装指南](docs/vibe/README.zh_CN.md)。
+1. **安装固件和 App。** 用 USB 数据线将设备连接电脑，打开
+   [FoloToy 玩法页](https://ai-passport.folotoy.cn/plays/2174/)，按页面指引直接安装固件。
+   再从 [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest)
+   下载配套版本的 Mac App，拖入“应用程序”。详细配置和按键说明见
+   [设备使用指南](docs/vibe/README.zh_CN.md)。
 2. **用手机给设备联网。** 连接设备配网热点，选择 2.4 GHz Wi-Fi。
    最多记住五个网络，在家和公司等已配置网络间自动重连。
 3. **配对设备。** 在 App 输入设备显示的配对码。需要语音输入时，再在输入法中选择
