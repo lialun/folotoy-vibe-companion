@@ -19,12 +19,17 @@
 
 ## 本地 Mac App
 
-开发机需要 Swift 和 macOS SDK，通常来自 Xcode Command Line Tools 或完整 Xcode。
-只有开发者需要编译器，最终用户不需要。
+构建客户端需要 macOS 13+、Swift、macOS SDK 和 Python 3，不依赖 ESP-IDF。
+Swift 与 SDK 可通过 Xcode Command Line Tools 或完整 Xcode 安装；
+Command Line Tools 的安装命令为 `xcode-select --install`。
 
 ```bash
+git clone https://github.com/lialun/folotoy-vibe-companion.git
+cd folotoy-vibe-companion
 bash macos/build.sh
 ```
+
+首次构建会下载并校验固定版本的收音机解码器源码，需要联网；后续构建使用本地缓存。
 
 脚本构建 `arm64` 和 `x86_64`，合并成通用应用，签名，运行原生协议测试，
 再在 `build/macos/` 生成 DMG 和 ZIP。仅开发自用时可以设置 `VIBE_ARCHS=arm64`。
@@ -36,7 +41,7 @@ DMG 内包含 App、指向“应用程序”的快捷方式和中英文安装说
 ZIP 是包含同一个 App 的替代下载。App 资源中包含许可及第三方声明。
 `SHA256SUMS.txt` 使用可移植的文件名，默认不使用 Apple 证书或账号秘密。
 
-构建脚本仍保留未来可选的 Developer ID 签名和公证能力，但它不属于这次选定的免费分发流程。
+Developer ID 签名和公证为可选项，默认构建不启用。
 可选方案需要自己的 [Developer ID](https://developer.apple.com/developer-id/)、钥匙串证书和 `notarytool` 配置：
 
 ```bash

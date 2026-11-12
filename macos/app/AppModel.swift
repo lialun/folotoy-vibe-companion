@@ -5,6 +5,7 @@ import ServiceManagement
 
 final class AppModel: ObservableObject {
     let agents:AgentCenter
+    let diagnostics:DiagnosticCenter
     let engine:Engine
     let preview:Bool
     @Published var state=ConnectionState()
@@ -37,7 +38,6 @@ final class AppModel: ObservableObject {
     private var radioOffset=0,radioSearchGeneration=0
     private var radioSearchCriteria:(String,Bool)?
     @Published var radioChecking=false
-    @Published var radioChecks:[String:String]=[:]
     private var radioBaseline:[RadioStation]=[]
     var filteredPresets:[RadioStation] { RadioStation.presets.filter { radioQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(radioQuery) } }
     @Published var tab=0
@@ -57,13 +57,15 @@ final class AppModel: ObservableObject {
         shortcut=session.shortcut;cityQuery=session.cityQuery;radioStations=session.stations;radioBaseline=session.baseline
         radioRevision=session.revision;radioCapacity=session.capacity;radioLoaded=session.radioLoaded
         radioQuery=session.query;radioChineseOnly=session.chineseOnly;radioSource=session.source
-        customName=session.customName;customURL=session.customURL;tab=session.tab
+        customName=session.customName;customURL=session.customURL;tab=(0...5).contains(session.tab) ? session.tab : 0
     }
     init(preview:Bool=false) {
         self.preview=preview
         if !preview { _=Shortcut.permitted }
         agents=AgentCenter(preview:preview)
+        diagnostics=DiagnosticCenter(preview:preview)
         engine=Engine(preview:preview)
+        engine.onDiagnostics={ [weak self] rows in self?.diagnostics.append(rows) }
         agents.deliver={ [weak self] event in self?.engine.notifyAgent(event) }
         engine.onAgentResult={ [weak self] message in self?.agents.message=message }
         if !preview {
@@ -73,7 +75,7 @@ final class AppModel: ObservableObject {
             } catch { agents.message="通知组件更新失败："+error.localizedDescription }
         }
         if preview {
-            state=ConnectionState(message:"界面预览",address:"不连接设备 · 示例数据",paired:true,connected:true,permission:true,audio:true)
+            state=ConnectionState(message:"界面预览",address:"不连接设备 · 示例数据",paired:true,connected:true,permission:true,audio:true,owned:true)
             loaded=true;settings.weather_enabled=true;settings.city="北京";settings.screen_seconds_min=3;settings.appearance=AppearanceSettings()
             radioStations=Array(RadioStation.presets.prefix(4));radioRevision=1;radioLoaded=true;radioCapacity=RadioStation.maximumCount
             return
@@ -104,7 +106,6 @@ final class AppModel: ObservableObject {
             self.radioBaseline=stations;self.radioRevision=revision;self.radioCapacity=capacity;self.radioLoaded=true
         }
         engine.onRadioLoading = { [weak self] in self?.radioLoading=$0 }
-        engine.onRadioVerified = { [weak self] in self?.radioChecks[$0]="设备已验证" }
         engine.start()
     }
     func save() {
@@ -167,7 +168,7 @@ final class AppModel: ObservableObject {
         RadioProbe.check(station) { [weak self] response in
             guard let self=self else { return };self.radioChecking=false
             switch response {
-            case .success(let checked):self.radioChecks[checked.url]="已检测";self.addStation(checked)
+            case .success(let checked):self.addStation(checked)
             case .failure(let error):self.result=error.localizedDescription
             }
         }

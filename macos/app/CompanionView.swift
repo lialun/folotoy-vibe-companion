@@ -37,7 +37,8 @@ struct CompanionView:View {
                         case 2: pomodoro
                         case 3: weather
                         case 4: radio
-                        default: AgentSettingsView(center:model.agents,preview:model.preview)
+                        case 5: AgentSettingsView(center:model.agents,preview:model.preview)
+                        default: connection
                         }
                     }.padding(.horizontal,28).padding(.bottom,24).frame(maxWidth:.infinity,alignment:.leading)
                 }
@@ -78,23 +79,36 @@ struct CompanionView:View {
     }
     private var connection:some View {
         VStack(spacing:16) {
-            card("你的 FoloToy","link") {
+            card("设备连接","link") {
                 HStack(spacing:16) {
-                    BrandMark(size:48)
-                    VStack(alignment:.leading,spacing:6) { Text(model.state.message).font(.system(size:16,weight:.medium));Text(model.state.connected ? model.state.address : "电脑与设备需连接同一局域网").font(.system(size:11,design:.monospaced)).foregroundStyle(Palette.muted) }
+                    BrandMark(size:36)
+                    VStack(alignment:.leading,spacing:6) {
+                        Text(model.state.message).font(.system(size:16,weight:.medium))
+                        if !model.state.connected { Text("通过同一局域网或蓝牙查找").font(.system(size:11)).foregroundStyle(Palette.muted) }
+                    }
                     Spacer();Button { model.engine.retry() } label: { Image(systemName:"arrow.clockwise") }.help("重新连接").buttonStyle(.borderless)
                 }
-                if !model.state.paired {
+                HStack(spacing:10) {
+                    connectionLink(.wifi,"Wi-Fi","wifi")
+                    connectionLink(.ble,"蓝牙","antenna.radiowaves.left.and.right")
+                }
+                if model.state.connected && !model.state.paired {
                     Divider().overlay(Palette.line)
-                    HStack { TextField("设备首页的六位配对码",text:$model.code).textFieldStyle(.roundedBorder).frame(maxWidth:240);Button("配对设备") { model.engine.pair(model.code) }.disabled(!model.state.connected || model.code.count != 6) }
+                    HStack { TextField("设备「配对电脑」中的六位配对码",text:$model.code).textFieldStyle(.roundedBorder).frame(maxWidth:260);Button("配对设备") { model.engine.pair(model.code) }.disabled(!model.state.connected || model.code.count != 6) }
+                } else if model.state.canClaim {
+                    Button("切换到本机") { model.engine.claim() }.buttonStyle(.borderedProminent).tint(Palette.accent).foregroundStyle(Palette.background)
+                }
+                if !model.state.bleConnected && (model.state.bluetoothPhase == .unauthorized || model.state.bluetoothPhase == .failed) {
+                    Label(model.state.bluetooth,systemImage:"exclamationmark.circle").font(.system(size:11)).foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true)
                 }
             }
             card("语音通道","waveform") {
-                readiness("音频驱动",detail:model.state.audio ? "BlackHole 2ch" : "安装后，在输入法中选择 BlackHole 2ch",ready:model.state.audio) {
+                if !model.state.voiceError.isEmpty { Label(model.state.voiceError,systemImage:"exclamationmark.circle").font(.system(size:11)).foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true) }
+                readiness("音频驱动",detail:model.state.audio ? "BlackHole 2ch" : "未安装 · 语音输入不可用",ready:model.state.audio) {
                     Link(model.state.audio ? "安装说明" : "安装 BlackHole",destination:URL(string:"https://existential.audio/blackhole/")!)
                 }
                 Divider().overlay(Palette.line)
-                readiness("快捷键权限",detail:model.state.permission ? "已授权" : "用于发送语音与回车按键",ready:model.state.permission) {
+                readiness("快捷键权限",detail:model.state.permission ? "已授权" : "未授权 · 无法触发语音和回车",ready:model.state.permission) {
                     if !model.state.permission { Button(model.permissionChecking ? "正在检查…" : "前往授权") { model.requestKeyboardPermission() }.disabled(model.permissionChecking) }
                 }
                 if !model.state.permission {
@@ -117,15 +131,25 @@ struct CompanionView:View {
                     }
                 }
             }
-            if model.state.powerAvailable && model.state.paired {
-                card("待机诊断","bolt.circle") {
-                    PowerDiagnosticsView(state:model.state,read:{ model.engine.readPower(reset:$0) },copy:{ report in
-                        let pasteboard=NSPasteboard.general;pasteboard.clearContents()
-                        model.result=pasteboard.setString(report,forType:.string) ? "诊断报告已复制" : "复制失败，请重试"
-                    })
-                }
+            card("设备状态","stethoscope") {
+                DeviceStatusView(center:model.diagnostics,state:model.state,readPower:{model.engine.readPower(reset:$0)},readRecords:{model.engine.readDiagnostics()},copy:{ report in
+                    let pasteboard=NSPasteboard.general;pasteboard.clearContents()
+                    model.result=pasteboard.setString(report,forType:.string) ? "设备状态报告已复制" : "复制失败，请重试"
+                })
             }
         }
+    }
+    private func connectionLink(_ link:LinkKind,_ title:String,_ symbol:String)->some View {
+        let status=model.state.linkStatus(link),active=status=="使用中",reachable=link == .wifi ? model.state.wifiConnected : model.state.bleConnected
+        return HStack(spacing:7) {
+            Image(systemName:symbol).frame(width:15)
+            Text(title).fontWeight(.medium)
+            Spacer(minLength:4)
+            Text(status).font(.system(size:10,weight:active ? .semibold : .regular))
+        }.font(.system(size:11)).foregroundStyle(active ? Palette.accent : reachable ? Palette.text : Palette.muted)
+            .padding(.horizontal,12).padding(.vertical,10).frame(maxWidth:.infinity)
+            .background(Palette.background.opacity(active ? 0.7 : 0.35),in:RoundedRectangle(cornerRadius:8))
+            .help(link == .wifi ? (reachable ? model.state.address : "连接同一局域网后自动发现设备") : model.state.bluetooth)
     }
     private func readiness<Action:View>(_ title:String,detail:String,ready:Bool,@ViewBuilder action:()->Action)->some View {
         HStack(spacing:10) {
@@ -136,6 +160,13 @@ struct CompanionView:View {
     }
     private var device:some View {
         VStack(spacing:16) {
+            card("无线连接","wifi") {
+                Toggle("Wi-Fi",isOn:Binding(get:{model.state.wifiEnabled},set:{ model.engine.setWireless(wifi:$0,bluetooth:model.state.bleEnabled) }))
+                Toggle("蓝牙",isOn:Binding(get:{model.state.bleEnabled},set:{ model.engine.setWireless(wifi:model.state.wifiEnabled,bluetooth:$0) }))
+                Text("连接稳定时保持当前链路。关闭两项后，需在设备设置中重新开启。")
+                    .font(.system(size:11)).foregroundStyle(Palette.muted)
+            }.disabled(!model.state.owned || model.state.recording)
+
             card("显示","sun.max") {
                 if model.settings.appearance != nil {
                     VStack(alignment:.leading,spacing:12) {
@@ -269,7 +300,6 @@ struct CompanionView:View {
             Image(systemName:"line.3.horizontal").foregroundStyle(Palette.muted)
             VStack(alignment:.leading,spacing:3) {
                 Text(station.name).font(.system(size:11)).lineLimit(2)
-                if let check=model.radioChecks[station.url] { Text(check).font(.system(size:9)).foregroundStyle(Palette.accent) }
             }.frame(maxWidth:.infinity,alignment:.leading)
             VStack(spacing:5) {
                 Button { model.moveStation(station,by:-1) } label: { Image(systemName:"chevron.up") }.help("上移电台")
@@ -294,9 +324,9 @@ struct CompanionView:View {
             if model.saving { ProgressView().controlSize(.small) }
             Text(model.result).font(.system(size:11)).foregroundStyle(Palette.muted).lineLimit(2).textSelection(.enabled)
             Spacer(minLength:6)
-            if model.tab != 0 && model.tab != 5 {
+            if (1...4).contains(model.tab) {
                 Button("重新读取") { model.reloadCurrent() }.buttonStyle(.borderless).disabled(!model.state.paired || model.saving)
-                Button(model.saving ? "正在保存" : "保存到设备") { model.save() }.buttonStyle(.borderedProminent).tint(Palette.accent).foregroundStyle(Palette.background).disabled(!model.loaded || !model.state.paired || !model.state.connected || model.saving || model.state.recording || model.radioLoading || model.radioChecking || (model.tab==4 && !model.radioLoaded))
+                Button(model.saving ? "正在保存" : "保存到设备") { model.save() }.buttonStyle(.borderedProminent).tint(Palette.accent).foregroundStyle(Palette.background).disabled(!model.loaded || !model.state.paired || !model.state.owned || !model.state.connected || model.saving || model.state.recording || model.radioLoading || model.radioChecking || (model.tab==4 && !model.radioLoaded))
             }
         }.padding(.horizontal,28).padding(.vertical,16).frame(minHeight:26).background(Palette.sidebar)
     }

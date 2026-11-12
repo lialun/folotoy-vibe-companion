@@ -41,7 +41,7 @@ struct LANSocket {
         return data.withUnsafeBytes { bytes in withUnsafePointer(to:&destination) { p in p.withMemoryRebound(to:sockaddr.self,capacity:1) { Darwin.sendto(fd,bytes.baseAddress,bytes.count,0,$0,socklen_t(MemoryLayout<sockaddr_in>.size)) } } }==data.count
     }
     static func beacon(port:UInt16,token:String,audioReady:Bool,hotkeyReady:Bool,epoch:Int,tz:Int)->[String:Any] {
-        var body:[String:Any]=["v":2,"role":"pc","port":Int(port)]
+        var body:[String:Any]=["v":3,"role":"pc","port":Int(port),"type":"discover"]
         if !token.isEmpty {
             body.merge(["type":"pc.status","token":token,"audioReady":audioReady,"hotkeyReady":hotkeyReady,"epoch":epoch,"tz":tz,"idleHeartbeat":negotiatedHeartbeatSeconds]) { _,new in new }
         }

@@ -61,6 +61,9 @@ int main(void) {
     usb=true;lock_rows=100;
     o=vibe_power_reply("bounded",false);char *wire=cJSON_PrintUnformatted(o);
     assert(wire && strlen(wire)<=1536);
+    /* Leave room for the retained radio checkpoint, maximum request ID and
+     * transport boot/lease envelope; an oversized reply is silently dropped. */
+    assert(strlen(wire)+256+64+48<=1536);
     assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"usb_host")));
     assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"locks_truncated")));
     free(wire);cJSON_Delete(o);

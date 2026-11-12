@@ -136,3 +136,5 @@ Upstream source: [ESP-IDF](https://github.com/espressif/esp-idf/tree/v5.5.3),
 When changing dependencies, review their current notices and refresh these
 retained copies and package labels together. The Espressif audio component's
 license is distinct from this project's MIT source license.
+
+The bundled radio decoder license is [LGPL-2.1](licenses/ffmpeg-lgpl-2.1.txt). FFmpeg 8.0.3 is built from the hash-pinned upstream source by `macos/build-radio-helper.sh`; its unmodified source archive and recipe are included in the application. Generated binaries and downloaded source stay outside Git.

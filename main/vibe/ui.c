@@ -17,6 +17,7 @@ LV_FONT_DECLARE(buddy_font_16);
 LV_FONT_DECLARE(vibe_font_20);
 static lv_font_t body,small,numbers16,numbers20,numbers36;
 #define HOME_TOP 24
+#define SETTINGS_VISIBLE 6
 #define KEY_RAIL_X 221
 typedef struct { uint32_t bg,panel,edge,ink,muted,accent,amber,focus,rest,weather; } palette_t;
 /* Warm mineral canvas. Neutral text provides hierarchy; saturated inks mark
@@ -44,13 +45,13 @@ static uint32_t graphic_color(uint32_t ink) {
     if (ink==AMBER || ink==WEATHER_COLOR) return 0x936100;
     return ink;
 }
-static lv_obj_t *screen,*clock_text,*wifi_bars[3],*battery;
+static lv_obj_t *screen,*clock_text,*wifi_bars[3],*bluetooth_mark,*battery;
 static lv_obj_t *home,*voice_state,*voice_hint,*voice_value,*wave_image;
 static lv_obj_t *module_root,*module_heading,*module_value,*module_text[27],*progress,*progress_fill;
 static int module_kind=-1;
 static lv_obj_t *rail_name[3],*rail_mark[3],*timer_mark,*timer_image,*setting_extra;
 static lv_obj_t *page_keys[3],*page_marks[3],*page_back;
-static lv_obj_t *page,*page_title,*page_subtitle,*rows[V_SETTING_COUNT],*row_text[V_SETTING_COUNT],*row_value[V_SETTING_COUNT],*page_value;
+static lv_obj_t *page,*page_title,*page_subtitle,*rows[SETTINGS_VISIBLE],*row_text[SETTINGS_VISIBLE],*row_value[SETTINGS_VISIBLE],*page_value;
 static vibe_page_t drawn_page=(vibe_page_t)-1;
 static void radio_slide_stop(void);
 static lv_obj_t *box(lv_obj_t *parent,int x,int y,int w,int h,uint32_t color,int radius) {
@@ -128,7 +129,7 @@ static void create_page(vibe_page_t kind) {
         lv_obj_set_pos(page_value,12,94);
         lv_obj_set_style_text_font(page_value,kind==V_RADIO_EXIT?&body:&lv_font_montserrat_48,0);
         if (kind==V_RADIO_EXIT) lv_obj_set_height(page_value,48);
-    } else for (int i=0;i<(kind==V_FUNCTIONS?2:V_SETTING_COUNT);i++) {
+    } else for (int i=0;i<(kind==V_FUNCTIONS?2:SETTINGS_VISIBLE);i++) {
         int top=(kind==V_FUNCTIONS || kind==V_SETTINGS_PAGE)?44:62;
         bool functions=kind==V_FUNCTIONS;
         rows[i]=box(page,8,functions?66+i*66:top+i*34,204,functions?58:28,PANEL,functions?0:6);
@@ -153,6 +154,7 @@ static void create_page(vibe_page_t kind) {
 }
 static void create_status(void) {
     for (int i=0;i<3;i++) wifi_bars[i]=box(screen,18+i*5,23-(4+i*3),3,4+i*3,ACCENT,1);
+    bluetooth_mark=label(screen,18,7,18,&lv_font_montserrat_16,ACCENT);put(bluetooth_mark,LV_SYMBOL_BLUETOOTH);
     clock_text=label(screen,40,6,108,&lv_font_montserrat_16,INK);
     // Reuse the existing label: right alignment anchors the icon while the
     // percentage grows leftwards, including 100%, inside the rounded inset.
@@ -278,7 +280,8 @@ void vibe_ui_refresh(void) {
     }
     put(clock_text,clock);
     int strength=s.wifi && s.signal.valid?(int)s.signal.bars:0;
-    for (int i=0;i<3;i++) tint(wifi_bars[i],i<strength?graphic_color(ACCENT):EDGE);
+    for (int i=0;i<3;i++) { show(wifi_bars[i],s.link!=V_LINK_BLE);tint(wifi_bars[i],i<strength?graphic_color(ACCENT):EDGE); }
+    show(bluetooth_mark,s.link==V_LINK_BLE);
     const char *battery_icon=s.battery<0?LV_SYMBOL_BATTERY_EMPTY:s.battery>80?LV_SYMBOL_BATTERY_FULL:s.battery>55?LV_SYMBOL_BATTERY_3:s.battery>30?LV_SYMBOL_BATTERY_2:s.battery>10?LV_SYMBOL_BATTERY_1:LV_SYMBOL_BATTERY_EMPTY;
     if (s.battery>=0 && s.battery<=100) snprintf(text,sizeof(text),"%d%% %s",s.battery,battery_icon);
     else snprintf(text,sizeof(text),"--%% %s",LV_SYMBOL_BATTERY_EMPTY);
@@ -293,11 +296,11 @@ void vibe_ui_refresh(void) {
     if (m.page==V_HOME) {
         const char *state="语音输入就绪",*hint="",*value="";
         if (m.recording) { state="正在输入";hint="松开上键，完成输入";snprintf(text,sizeof(text),"%02u:%02u",(unsigned)((now-m.recording_since_ms)/60000),(unsigned)((now-m.recording_since_ms)/1000%60));value=text; }
-        else if (!s.wifi) { state="等待网络";hint="Wi-Fi 正在重新连接"; }
-        else if (!s.token[0]) { state="连接电脑";hint="在客户端输入配对码";value=s.pair_code; }
-        else if (!s.peer) { state="等待电脑";hint="请打开伴侣客户端"; }
+        else if (!s.paired_count) { state="连接电脑";hint="在客户端输入配对码";value=s.pair_code; }
+        else if (!s.peer) { state="等待电脑";hint="打开客户端连接设备"; }
         else if (!s.audio_ready || !s.hotkey_ready) { state="语音未就绪";hint="在客户端完成语音设置"; }
         else if (s.audio_fault) { state="请再试一次";hint="按住上键重试音频"; }
+        if (s.peer && !m.recording && !hint[0]) hint=s.computer;
         put(voice_value,value);put(voice_state,state);put(voice_hint,hint);
         uint32_t voice_color=m.voice_ready || m.recording?ACCENT:MUTED;
         text_color(voice_state,m.voice_ready || m.recording?ACCENT:INK);text_color(voice_value,ACCENT);
@@ -341,14 +344,14 @@ void vibe_ui_refresh(void) {
         if (lv_obj_get_width(page_marks[2])!=(setup?10:3)) {
             lv_obj_set_width(page_marks[2],setup?10:3);lv_obj_set_x(page_marks[2],KEY_RAIL_X+(setup?3:7));
         }
-        if (!exiting) for (int i=0;i<(m.page==V_FUNCTIONS?2:V_SETTING_COUNT);i++) {
+        if (!exiting) for (int i=0;i<(m.page==V_FUNCTIONS?2:SETTINGS_VISIBLE);i++) {
             bool visible=m.page==V_SETTINGS_PAGE || m.page==V_FUNCTIONS ||
                 (m.page==V_PROVISION && (i==0 || i==1 || i==3 || i==4));
             show(rows[i],visible);
         }
         if (m.page!=V_POMODORO && m.page!=V_RADIO_EXIT) put(page_value,"");
         if (m.page==V_FUNCTIONS) {
-            put(page_title,"更多功能"); subtitle(&m,&s,"");
+            put(page_title,"更多功能"); subtitle(&m,&s,m.selected==1 && !s.peer?"连接电脑后可用":"");
             static const char *names[]={"设备设置","收音机"},*symbols[]={LV_SYMBOL_SETTINGS,LV_SYMBOL_AUDIO};
             for (unsigned i=0;i<2;i++) {
                 bool selected=m.selected==i;
@@ -358,14 +361,23 @@ void vibe_ui_refresh(void) {
             }
         } else if (m.page==V_SETTINGS_PAGE) {
             put(page_title,"设备设置"); subtitle(&m,&s,"");
-            const char *names[]={"屏幕亮度","设备音量","自动息屏","屏幕主题","重新配网","解除电脑配对"};
+            const char *names[]={"屏幕亮度","设备音量","自动息屏","屏幕主题","Wi-Fi","蓝牙","配对电脑","重新配网","解除所有配对"};
             const char *themes[]={"暗色","亮色","自动"};
-            for (int i=0;i<V_SETTING_COUNT;i++) {
+            unsigned first=(m.selected/SETTINGS_VISIBLE)*SETTINGS_VISIBLE;
+            for (int slot=0;slot<SETTINGS_VISIBLE;slot++) {
+                unsigned i=first+slot;show(rows[slot],i<V_SETTING_COUNT);if (i>=V_SETTING_COUNT) continue;
+                lv_obj_set_y(rows[slot],44+slot*34);
                 text[0]=0;
                 if (i<3) snprintf(text,sizeof(text),"%u%s",i==0?m.brightness:i==1?m.volume:m.screen_seconds,i==2?" 秒":"%");
                 if (i==V_SETTING_THEME) snprintf(text,sizeof(text),"%s",themes[m.theme_mode<=V_THEME_SCHEDULED?m.theme_mode:V_THEME_SCHEDULED]);
-                row(i,i==V_SETTING_UNPAIR&&m.reset_confirm?"确认解除配对？":names[i],text,m.selected==(unsigned)i,m.editing && m.selected==(unsigned)i);
+                if (i==V_SETTING_WIFI_ENABLED || i==V_SETTING_BLE_ENABLED) snprintf(text,sizeof(text),"%s",(i==V_SETTING_WIFI_ENABLED?m.wifi_enabled:m.ble_enabled)?"开启":"关闭");
+                row(slot,i==V_SETTING_UNPAIR&&m.reset_confirm?"确认解除配对？":names[i],text,m.selected==(unsigned)i,m.editing && m.selected==(unsigned)i);
             }
+        } else if (m.page==V_PAIR) {
+            for (unsigned i=0;i<SETTINGS_VISIBLE;i++) show(rows[i],false);
+            put(page_title,"配对电脑");subtitle(&m,&s,"在客户端输入配对码");put(page_value,s.pair_code);
+            put(page_keys[0],"");put(page_keys[1],"");put(page_keys[2],"返\n回");
+            show(page_marks[0],false);show(page_marks[1],false);
         } else if (m.page==V_POMODORO) {
             bool armed=m.timer==V_TIMER_ARMED;
             put(page_title,m.switch_radio?"结束番茄并收听？":"退出番茄？");
@@ -375,7 +387,7 @@ void vibe_ui_refresh(void) {
             text_color(page_value,m.timer_break?REST_COLOR:FOCUS_COLOR);
         } else if (m.page==V_RADIO_EXIT) {
             put(page_title,"退出收音机？");
-            const char *state=!m.radio_count?"暂无电台":!s.wifi?"等待 Wi-Fi":!m.radio_requested?"已停止":
+            const char *state=!m.radio_count?"暂无电台":!s.peer?"等待电脑连接":!m.radio_requested?"已停止":
                 s.radio_state==V_RADIO_ERROR?"连接失败":s.radio_state==V_RADIO_PLAYING?"正在播放":
                 s.radio_state==V_RADIO_BUFFERING?"正在缓冲":"正在连接";
             subtitle(&m,&s,state);put(page_value,m.radio_count?s.radio_name:"");text_color(page_value,INK);

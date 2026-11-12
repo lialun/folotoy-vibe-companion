@@ -1,18 +1,25 @@
 #include "vibe.h"
+#include "radio/relay.h"
+#include "diagnostics.h"
 #include "portal.h"
 #include "peer.h"
+#include "transport.h"
+#include "ble.h"
 #include "wifi_profiles.h"
 #include "wifi_retry.h"
 #include "clock_sync.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_check.h"
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
+#include "esp_vfs_eventfd.h"
+#include <unistd.h>
 #include "lwip/sockets.h"
 #include "nvs.h"
 #include <errno.h>
@@ -22,11 +29,10 @@
 
 static const char *TAG="vibe_net";
 static int udp=-1;
+static int wake_fd=-1;
 static int dns_socket=-1;
-static struct sockaddr_in peer;
-static uint64_t last_sent_ms; /* Protected by peer_mutex. */
-static SemaphoreHandle_t peer_mutex;
-static QueueHandle_t tx_queue,net_commands;
+static QueueHandle_t net_commands;
+static bool wifi_running=true;
 static httpd_handle_t web;
 static bool ap_started,ap_automatic,testing_credentials;
 static uint64_t credentials_at,boot_at,setup_saved_at;
@@ -37,8 +43,6 @@ static SemaphoreHandle_t profiles_mutex;
 static vibe_wifi_retry_t auto_connection;
 typedef enum { SETUP_SELECT,SETUP_CONNECTING,SETUP_CONNECTED,SETUP_FAILED } setup_phase_t;
 static setup_phase_t setup_phase; /* Protected by v_mutex, including HTTP access. */
-static unsigned event_sequence;
-static uint32_t boot_nonce;
 static bool profiles_persist(const void *blob,size_t size,void *context) {
     (void)context;nvs_handle_t n;
     if (nvs_open("vibe_wifi",NVS_READWRITE,&n)!=ESP_OK) return false;
@@ -92,33 +96,18 @@ static void remember_connected(void) {
     xSemaphoreGive(profiles_mutex);
 }
 void vibe_network_wake(void) {
-    if (udp>=0) {
-        struct sockaddr_in wake={.sin_family=AF_INET,.sin_port=htons(VIBE_PORT),.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
-        const char byte=0;sendto(udp,&byte,1,MSG_DONTWAIT,(struct sockaddr *)&wake,sizeof(wake));
-    }
+    /* A UDP loopback wake needs an UP IP interface in lwIP. BLE-only mode has
+     * none. eventfd wakes select directly, coalesces events and needs no polling
+     * task, packet buffer, RF activity or additional periodic timer. */
+    if (wake_fd>=0) { uint64_t one=1;(void)write(wake_fd,&one,sizeof(one)); }
 }
-void vibe_send_json(const char *s) {
-    if (!tx_queue || strlen(s)>VIBE_JSON_MAX) return;
-    char *tx=strdup(s);
-    if (tx) {
-        if (xQueueSend(tx_queue,&tx,0)!=pdTRUE) { free(tx);return; }
-        /* Interrupt a long idle recv immediately for voice/key/config events. */
-        vibe_network_wake();
-    }
+int vibe_wifi_send(vibe_route_t route,unsigned char type,const void *bytes,size_t n) {
+    if (udp<0 || route.kind!=V_LINK_WIFI || !route.address || !route.port || n>VIBE_JSON_MAX) return -1;
+    struct sockaddr_in target={.sin_family=AF_INET,.sin_port=route.port,.sin_addr.s_addr=route.address};
+    struct iovec parts[2]={{.iov_base=&type,.iov_len=1},{.iov_base=(void *)bytes,.iov_len=n}};
+    struct msghdr message={.msg_name=&target,.msg_namelen=sizeof(target),.msg_iov=parts,.msg_iovlen=2};
+    return sendmsg(udp,&message,MSG_DONTWAIT)==(ssize_t)(n+1)?0:-1;
 }
-static int send_packet(unsigned char type,const void *bytes,size_t n) {
-    if (udp<0 || n>VIBE_JSON_MAX) return -1;
-    static unsigned char packet[VIBE_JSON_MAX+1];
-    xSemaphoreTake(peer_mutex,portMAX_DELAY);
-    packet[0]=type; memcpy(packet+1,bytes,n);
-    int result=-1;
-    if (peer.sin_addr.s_addr)
-        result=sendto(udp,packet,n+1,MSG_DONTWAIT,(struct sockaddr *)&peer,sizeof(peer))==(int)n+1 ? 0 : -1;
-    if (!result) last_sent_ms=vibe_now();
-    xSemaphoreGive(peer_mutex);
-    return result;
-}
-int vibe_send_audio(const void *bytes,size_t n) { return send_packet(1,bytes,n); }
 static void ui_provision(bool show) {
     vibe_msg_t m={.type=V_MSG_PROVISION,.event=show}; xQueueSend(v_queue,&m,pdMS_TO_TICKS(100));
 }
@@ -131,9 +120,10 @@ static void wifi_event(void *arg,esp_event_base_t base,int32_t id,void *data) {
         xSemaphoreTake(v_mutex,portMAX_DELAY);
         v_status.wifi=true;
         snprintf(v_status.ip,sizeof(v_status.ip),IPSTR,IP2STR(&ip->ip_info.ip));
-        bool resume=v_model.radio_active && v_model.radio_requested;
         xSemaphoreGive(v_mutex);
-        if (resume) vibe_audio_request(V_RADIO_CHANGED);
+        /* Radio follows its computer owner, not Wi-Fi association. A background
+         * Wi-Fi reconnect must not interrupt healthy BLE listening. The owner
+         * controller wakes audio when the selected route actually changes. */
     } else if (base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *reason=data;
         wifi_ap_record_t linked;
@@ -143,10 +133,9 @@ static void wifi_event(void *arg,esp_event_base_t base,int32_t id,void *data) {
             reason?reason->ssid_len:0,associated);
         xSemaphoreGive(profiles_mutex);
         if (!relevant) return;
-        xSemaphoreTake(peer_mutex,portMAX_DELAY);memset(&peer,0,sizeof(peer));last_sent_ms=0;xSemaphoreGive(peer_mutex);
+        vibe_msg_t lost={.type=V_MSG_LINK_LOST,.event=1};(void)xQueueSend(v_queue,&lost,0);
         xSemaphoreTake(v_mutex,portMAX_DELAY);
-        v_status.wifi=false;v_status.peer=false;v_status.peer_seen_ms=0;
-        v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.signal=(vibe_signal_t){0};
+        v_status.wifi=false;v_status.signal=(vibe_signal_t){0};
         xSemaphoreGive(v_mutex);
         /* Intentional disconnects precede set_config/connect; do not mistake
          * their delayed callbacks for failure of the replacement attempt. */
@@ -368,12 +357,6 @@ static void finish_ap(void) {
     xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.provisioning=false; xSemaphoreGive(v_mutex);
     ui_provision(false);
 }
-static void hello(void) {
-    vibe_status_t s; vibe_snapshot(NULL,NULL,&s);
-    char line[320];
-    snprintf(line,sizeof(line),"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"boot\":%lu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1}",s.device_id,s.token[0]?"true":"false",(unsigned long)boot_nonce,(unsigned long)s.settings_revision);
-    send_packet(2,line,strlen(line));
-}
 static void network_task(void *arg) {
     (void)arg;
     udp=socket(AF_INET,SOCK_DGRAM,IPPROTO_IP);
@@ -382,12 +365,10 @@ static void network_task(void *arg) {
     if (udp<0 || bind(udp,(struct sockaddr *)&address,sizeof(address))<0) {
         ESP_LOGE(TAG,"Cannot bind voice port");if (udp>=0) close(udp);udp=-1;vTaskDelete(NULL);return;
     }
-    setsockopt(udp,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
     uint64_t signal_at=0;
     bool ever_connected=false,provisioning_offered=false,connected_handled=false;
     vibe_clock_sync_t clock_sync={0};
     vibe_wifi_retry_reset(&auto_connection,vibe_now());
-    char *tx;
     for (;;) {
         uint64_t now=vibe_now(); int cmd;
         xSemaphoreTake(v_mutex,portMAX_DELAY);
@@ -396,7 +377,7 @@ static void network_task(void *arg) {
         vibe_clock_poll(&clock_sync,now,clock_wifi,clock_paused);
         vibe_weather_poll(now);
         while (xQueueReceive(net_commands,&cmd,0)==pdTRUE) {
-            if (cmd==1) { provisioning_offered=true;start_ap(false); }
+            if (cmd==1) { provisioning_offered=true;if (!wifi_running) { esp_wifi_start();wifi_running=true; xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.wifi_enabled=true;xSemaphoreGive(v_mutex); }start_ap(false); }
             else if (cmd==2) {
                 if (testing_credentials) { testing_credentials=false;memset(&candidate,0,sizeof(candidate));vibe_wifi_retry_reset(&auto_connection,now); }
                 finish_ap();
@@ -418,7 +399,17 @@ static void network_task(void *arg) {
                 else { vibe_wifi_retry_reset(&auto_connection,now);auto_connection.due=now+1000; }
             }
         }
-        vibe_status_t s; vibe_snapshot(NULL,NULL,&s);
+        vibe_status_t s; vibe_model_t mode;vibe_snapshot(&mode,NULL,&s);
+        /* Acknowledge wireless changes over the old route before stopping it. */
+        vibe_diagnostics_flush();vibe_transport_flush();
+        if (wifi_running!=s.wifi_enabled) {
+            wifi_running=s.wifi_enabled;
+            if (wifi_running) { esp_wifi_start();esp_wifi_set_ps(WIFI_PS_MIN_MODEM);vibe_wifi_retry_reset(&auto_connection,now); }
+            else { if (ap_started) finish_ap();esp_wifi_stop();vibe_msg_t lost={.type=V_MSG_LINK_LOST,.event=1};(void)xQueueSend(v_queue,&lost,0); }
+        }
+        (void)vibe_ble_enable(s.ble_enabled);
+        vibe_ble_poll(now,(mode.recording || (mode.radio_active && mode.radio_requested)) && s.link==V_LINK_BLE,s.ble_peer);
+        if (ap_started && ap_automatic && s.peer && s.link==V_LINK_BLE) finish_ap();
         if (!s.wifi) connected_handled=false;
         if (testing_credentials) {
             if (s.wifi) {
@@ -445,7 +436,7 @@ static void network_task(void *arg) {
                 xSemaphoreTake(v_mutex,portMAX_DELAY);setup_phase=SETUP_CONNECTED;
                 strlcpy(v_status.notice,"已连接保存的 Wi-Fi",sizeof(v_status.notice));xSemaphoreGive(v_mutex);
             }
-        } else if (!ap_started) {
+        } else if (!ap_started && s.wifi_enabled) {
             xSemaphoreTake(profiles_mutex,portMAX_DELAY);unsigned count=networks.count;
             xSemaphoreGive(profiles_mutex);
             if (vibe_wifi_retry_timeout(&auto_connection,now)) { vibe_wifi_retry_failed(&auto_connection,now,count);esp_wifi_disconnect(); }
@@ -474,7 +465,7 @@ static void network_task(void *arg) {
         xSemaphoreTake(profiles_mutex,portMAX_DELAY);bool has_saved=networks.count>0;xSemaphoreGive(profiles_mutex);
         wifi_ap_record_t linked;
         bool associated=!s.wifi && esp_wifi_sta_get_ap_info(&linked)==ESP_OK;
-        if (!s.wifi && !ap_started && !ever_connected && !provisioning_offered &&
+        if (s.wifi_enabled && !s.paired_count && !s.peer && !s.wifi && !ap_started && !ever_connected && !provisioning_offered &&
             vibe_wifi_offer_setup(&auto_connection,now,boot_at,has_saved,associated)) {
             provisioning_offered=true;start_ap(true);
         }
@@ -482,59 +473,23 @@ static void network_task(void *arg) {
         static unsigned char packet[VIBE_JSON_MAX+2]; struct sockaddr_in from; socklen_t len=sizeof(from);
         vibe_model_t power;vibe_snapshot(&power,NULL,NULL);
         unsigned wait_ms=ap_started?100:power.recording?50:power.screen_on?200:
-            (!s.wifi || testing_credentials || auto_connection.pending)?1000:30000;
+            ((s.wifi_enabled && !s.wifi) || testing_credentials || auto_connection.pending)?1000:30000;
         wait_ms=vibe_clock_wait(&clock_sync,vibe_now(),wait_ms);
         timeout.tv_usec=(wait_ms%1000)*1000;timeout.tv_sec=wait_ms/1000;
-        setsockopt(udp,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
-        int n=recvfrom(udp,packet,sizeof(packet)-1,0,(struct sockaddr *)&from,&len);
+        fd_set readable;FD_ZERO(&readable);FD_SET(udp,&readable);FD_SET(wake_fd,&readable);
+        int ready=select((udp>wake_fd?udp:wake_fd)+1,&readable,NULL,NULL,&timeout);
+        if (ready>0 && FD_ISSET(wake_fd,&readable)) { uint64_t pending;(void)read(wake_fd,&pending,sizeof(pending)); }
+        int n=ready>0 && FD_ISSET(udp,&readable)?recvfrom(udp,packet,sizeof(packet)-1,MSG_DONTWAIT,(struct sockaddr *)&from,&len):0;
         now=vibe_now(); /* A long blocking receive must not age fresh beacons. */
+        if (n>1 && packet[0]==5) {
+            (void)vibe_relay_receive((vibe_route_t){.kind=V_LINK_WIFI,.address=from.sin_addr.s_addr,.port=from.sin_port},packet,(size_t)n);
+        }
         if (n>1 && n<=VIBE_JSON_MAX+1 && (packet[0]==2 || packet[0]==3) && vibe_json_depth_ok((char *)packet+1,n-1)) {
             packet[n]=0;
-            if (packet[0]==3) {
-                cJSON *o=cJSON_Parse((char *)packet+1);
-                cJSON *role=cJSON_GetObjectItemCaseSensitive(o,"role"),*auth=cJSON_GetObjectItemCaseSensitive(o,"token");
-                bool permitted=from.sin_addr.s_addr && from.sin_port && cJSON_IsString(role) && !strcmp(role->valuestring,"pc") &&
-                    (!s.token[0] || (cJSON_IsString(auth) && !strcmp(auth->valuestring,s.token)));
-                if (permitted) {
-                    xSemaphoreTake(peer_mutex,portMAX_DELAY);
-                    bool changed=!vibe_peer_matches(peer.sin_addr.s_addr,peer.sin_port,from.sin_addr.s_addr,from.sin_port);
-                    peer=from;xSemaphoreGive(peer_mutex);
-                    xSemaphoreTake(v_mutex,portMAX_DELAY);
-                    v_status.peer_seen_ms=now;
-                    if (changed) { v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.heartbeat_ms=5000; }
-                    xSemaphoreGive(v_mutex);
-                    /* New clients include authenticated readiness/time in the
-                     * beacon. Old fixed-port clients still send pc.status. */
-                    const cJSON *type=cJSON_GetObjectItemCaseSensitive(o,"type");
-                    if (cJSON_IsString(type) && !strcmp(type->valuestring,"pc.status"))
-                        (void)vibe_message_post_json(v_queue,(char *)packet+1,n-1);
-                    hello();
-                }
-                cJSON_Delete(o);
-            } else {
-                xSemaphoreTake(peer_mutex,portMAX_DELAY);
-                bool known=vibe_peer_matches(peer.sin_addr.s_addr,peer.sin_port,from.sin_addr.s_addr,from.sin_port);
-                xSemaphoreGive(peer_mutex);
-                if (known) {
-                    (void)vibe_message_post_json(v_queue,(char *)packet+1,n-1);
-                }
-            }
+            (void)vibe_message_post_from(v_queue,(char *)packet+1,n-1,
+                (vibe_route_t){.kind=V_LINK_WIFI,.address=from.sin_addr.s_addr,.port=from.sin_port});
         }
-        while (xQueueReceive(tx_queue,&tx,0)==pdTRUE) {
-            bool critical=strstr(tx,"voice.start") || strstr(tx,"voice.end") || strstr(tx,"key.action");
-            if (!critical) { send_packet(2,tx,strlen(tx)); free(tx); continue; }
-            cJSON *o=cJSON_Parse(tx); free(tx);
-            cJSON_AddNumberToObject(o,"eid",++event_sequence);
-            char *line=cJSON_PrintUnformatted(o); cJSON_Delete(o);
-            if (line) {
-                for (int i=0;i<3;i++) send_packet(2,line,strlen(line));
-                free(line);
-            }
-        }
-        xSemaphoreTake(peer_mutex,portMAX_DELAY);
-        uint64_t sent=last_sent_ms;bool has_peer=peer.sin_addr.s_addr && peer.sin_port;
-        xSemaphoreGive(peer_mutex);
-        if (s.wifi && vibe_peer_heartbeat_due(vibe_now(),sent,s.peer_seen_ms,has_peer,s.heartbeat_ms)) send_packet(4,"",0);
+        vibe_diagnostics_flush();vibe_transport_flush();
         if (s.wifi && power.screen_on && (!s.signal.valid || now-signal_at>=5000)) {
             signal_at=now;
             wifi_ap_record_t ap;
@@ -552,9 +507,11 @@ static void network_task(void *arg) {
     }
 }
 esp_err_t vibe_network_init(void) {
-    boot_nonce=esp_random();
-    peer_mutex=xSemaphoreCreateMutex();profiles_mutex=xSemaphoreCreateMutex(); tx_queue=xQueueCreate(8,sizeof(char *)); net_commands=xQueueCreate(4,sizeof(int));
-    if (!peer_mutex || !profiles_mutex || !tx_queue || !net_commands) return ESP_ERR_NO_MEM;
+    esp_vfs_eventfd_config_t events={.max_fds=1};
+    ESP_RETURN_ON_ERROR(esp_vfs_eventfd_register(&events),TAG,"Network wake registration failed");
+    wake_fd=eventfd(0,0);if (wake_fd<0) return ESP_ERR_NO_MEM;
+    profiles_mutex=xSemaphoreCreateMutex();net_commands=xQueueCreate(4,sizeof(int));
+    if (!profiles_mutex || !net_commands) return ESP_ERR_NO_MEM;
     ESP_ERROR_CHECK(esp_netif_init()); ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta(); esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT(); ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -563,7 +520,8 @@ esp_err_t vibe_network_init(void) {
     esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,NULL);
     profiles_load();
     esp_wifi_set_mode(WIFI_MODE_STA);
-    ESP_ERROR_CHECK(esp_wifi_start()); esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    wifi_running=v_status.wifi_enabled;
+    if (wifi_running) { ESP_ERROR_CHECK(esp_wifi_start());esp_wifi_set_ps(WIFI_PS_MIN_MODEM); }
     boot_at=vibe_now();
     if (xTaskCreate(network_task,"vibe_net",8192,NULL,4,NULL)!=pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;

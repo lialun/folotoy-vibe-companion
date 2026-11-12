@@ -23,12 +23,16 @@ extern "C" {
 namespace {
 constexpr size_t input_size=radio_stream::Workspace::input_size,stack_size=radio_stream::Workspace::stack_size;
 constexpr char tag[]="vibe_radio";
-void report_heap(const char *phase) {
+void report_heap(const char *phase,int result=0) {
 #ifdef ESP_PLATFORM
-    ESP_LOGI(tag,"Heap %s: free=%u largest=%u minimum=%u",phase,(unsigned)esp_get_free_heap_size(),
-        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),(unsigned)esp_get_minimum_free_heap_size());
+    static_assert(sizeof(vibe_radio_diagnostic_t)==16,"Keep the retained diagnostic bounded");
+    const vibe_radio_diagnostic_t snapshot={phase,result,esp_get_free_heap_size(),
+        static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT))};
+    xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.radio_diagnostic=snapshot;xSemaphoreGive(v_mutex);
+    ESP_LOGI(tag,"Heap %s: result=%d free=%u largest=%u minimum=%u",phase,result,(unsigned)snapshot.free,
+        (unsigned)snapshot.largest,(unsigned)esp_get_minimum_free_heap_size());
 #else
-    (void)phase;
+    (void)phase;(void)result;
 #endif
 }
 // The single audio worker owns decoder registration. Open the real frame
@@ -74,6 +78,7 @@ bool prime_decoder(RadioSource &source,esp_audio_simple_dec_handle_t decoder,
             const auto error=esp_audio_simple_dec_process(decoder,&raw,&frame);
             if (error!=ESP_AUDIO_ERR_OK || raw.consumed>raw.len || frame.decoded_size>frame.len) {
                 out_of_memory=error==ESP_AUDIO_ERR_MEM_LACK;
+                report_heap("prime-decode",error);
                 ESP_LOGE(tag,"Container preparation failed: %d needed=%lu",error,(unsigned long)frame.needed_size);
                 vibe_radio_status(V_RADIO_ERROR,out_of_memory?"解码内存不足":"解码失败");return false;
             }
@@ -91,7 +96,7 @@ bool prime_decoder(RadioSource &source,esp_audio_simple_dec_handle_t decoder,
             if (raw.consumed) stalled=0;
         }
     }
-    if (!cancel()) vibe_radio_status(V_RADIO_ERROR,"连接失败");
+    if (!cancel()) { report_heap("prime-read",-1);vibe_radio_status(V_RADIO_ERROR,"连接失败"); }
     return false;
 }
 struct Reader {
@@ -139,7 +144,7 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
     esp_audio_simple_dec_handle_t decoder=nullptr;
     bool registered=false,simple_registered=false,played=false,out_of_memory=false;
     do {
-        if (!source.open(url)) { if (cancel()) break;out_of_memory=source.oom();vibe_radio_status(V_RADIO_ERROR,out_of_memory?"播放内存不足":"连接失败"); break; }
+        if (!source.open(url)) { if (cancel()) break;out_of_memory=source.oom();report_heap("source-open",out_of_memory?ESP_AUDIO_ERR_MEM_LACK:-1);vibe_radio_status(V_RADIO_ERROR,out_of_memory?"播放内存不足":"连接失败"); break; }
         report_heap("source-open");
         if (cancel()) break;
         // Registration can fail after installing some entries. Always roll back
@@ -149,6 +154,7 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
         if (result==ESP_AUDIO_ERR_OK) result=reserve_decoder(source.type());
         if (result!=ESP_AUDIO_ERR_OK) {
             out_of_memory=result==ESP_AUDIO_ERR_MEM_LACK;
+            report_heap("frame-open",result);
             ESP_LOGE(tag,"Frame decoder preparation failed: %d",result);
             vibe_radio_status(V_RADIO_ERROR,out_of_memory?"解码内存不足":"解码初始化失败");break;
         }
@@ -156,13 +162,14 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
         result=esp_audio_simple_dec_register_default();
         if (result!=ESP_AUDIO_ERR_OK) {
             out_of_memory=result==ESP_AUDIO_ERR_MEM_LACK;
+            report_heap("parser-register",result);
             ESP_LOGE(tag,"Decoder registration failed: %d",result);
             vibe_radio_status(V_RADIO_ERROR,out_of_memory?"解码内存不足":"解码初始化失败");break;
         }
         esp_audio_simple_dec_cfg_t cfg{}; cfg.dec_type=source.type();
         const auto opened=esp_audio_simple_dec_open(&cfg,&decoder);
-        if (opened!=ESP_AUDIO_ERR_OK) { out_of_memory=opened==ESP_AUDIO_ERR_MEM_LACK;ESP_LOGE(tag,"Decoder open failed: %d",opened);vibe_radio_status(V_RADIO_ERROR,out_of_memory?"解码内存不足":"解码初始化失败"); break; }
-        if (!workspace.allocate_decode(std::malloc,source.type()==ESP_AUDIO_SIMPLE_DEC_TYPE_MP3)) { out_of_memory=true;vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break; }
+        if (opened!=ESP_AUDIO_ERR_OK) { out_of_memory=opened==ESP_AUDIO_ERR_MEM_LACK;report_heap("parser-open",opened);ESP_LOGE(tag,"Decoder open failed: %d",opened);vibe_radio_status(V_RADIO_ERROR,out_of_memory?"解码内存不足":"解码初始化失败"); break; }
+        if (!workspace.allocate_decode(std::malloc,source.type()==ESP_AUDIO_SIMPLE_DEC_TYPE_MP3)) { out_of_memory=true;report_heap("decode-workspace",ESP_AUDIO_ERR_MEM_LACK);vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break; }
         esp_audio_simple_dec_raw_t primed_raw{};
         unsigned primed_pcm=0;
         radio_stream::IcyFilter icy(source.icy_interval());
@@ -177,12 +184,14 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
         if (cancel()) break;
 #ifdef ESP_PLATFORM
         if (!workspace.plan_stream(esp_get_free_heap_size())) {
+            report_heap("stream-budget",ESP_AUDIO_ERR_MEM_LACK);
             out_of_memory=true;vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break;
         }
 #endif
-        if (!workspace.allocate_stream()) { out_of_memory=true;vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break; }
+        if (!workspace.allocate_stream()) { out_of_memory=true;report_heap("stream-workspace",ESP_AUDIO_ERR_MEM_LACK);vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break; }
 #ifdef ESP_PLATFORM
         if (!workspace.retain_reserve(esp_get_free_heap_size())) {
+            report_heap("stream-reserve",ESP_AUDIO_ERR_MEM_LACK);
             out_of_memory=true;vibe_radio_status(V_RADIO_ERROR,"播放内存不足");break;
         }
 #endif
@@ -194,7 +203,7 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
         StaticTask_t control;
         TaskHandle_t task=xTaskCreateStatic(read_stream,"radio_http",stack_size,&reader,5,
             reinterpret_cast<StackType_t *>(workspace.stack),&control);
-        if (!task) { out_of_memory=true;vibe_radio_status(V_RADIO_ERROR,"读取任务启动失败");break; }
+        if (!task) { out_of_memory=true;report_heap("reader-task",ESP_AUDIO_ERR_MEM_LACK);vibe_radio_status(V_RADIO_ERROR,"读取任务启动失败");break; }
         bool buffering=true,first=true,failed=false;
         int last_volume=-1;
         const unsigned channels=info.channel;
@@ -243,6 +252,7 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
                 decode_peak=std::max<unsigned>(decode_peak,std::min<int64_t>(esp_timer_get_time()-decode_started,UINT32_MAX));
                 if (error!=ESP_AUDIO_ERR_OK || (!primed && raw.consumed>raw.len) || frame.decoded_size>output_size) {
                     out_of_memory=error==ESP_AUDIO_ERR_MEM_LACK;
+                    report_heap("decode",error);
                     ESP_LOGE(tag,"Decode failed: %d needed=%lu",error,(unsigned long)frame.needed_size);
 #ifdef ESP_PLATFORM
                     ESP_LOGE(tag,"Decoder heap: free=%u largest=%u",(unsigned)esp_get_free_heap_size(),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -285,6 +295,7 @@ extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)
         xTaskNotifyGive(task);
         while (!reader.finished.load(std::memory_order_acquire)) ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(250));
         vTaskDelete(task);
+        if (!cancel() && !failed) report_heap(reader.failed.load()?"stream-read":"stream-end",reader.failed.load()?-1:0);
         ESP_LOGI(tag,"Session stopped: refills=%u network_error=%d read_max_ms=%u decode_max_ms=%u pcm_gap_max_ms=%u",
             refills,int(reader.failed.load()),reader.read_peak_us.load()/1000,decode_peak/1000,pcm_gap_peak/1000);
     } while (false);

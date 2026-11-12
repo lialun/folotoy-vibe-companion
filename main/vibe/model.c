@@ -148,6 +148,8 @@ unsigned vibe_model_key(vibe_model_t *m, vibe_key_t key, vibe_event_t event, uin
                 else { exit_timer(m);m->radio_active=true;m->radio_requested=m->radio_count>0;if (!m->radio_count) m->radio_index=0;return V_RADIO_CHANGED; }
             }
         }
+    } else if (m->page == V_PAIR) {
+        if (key==V_SETTINGS && (event==V_LONG || event==V_CLICK)) { m->page=V_SETTINGS_PAGE;m->selected=V_SETTING_PAIR; }
     } else if (m->page == V_SETTINGS_PAGE) {
         if (key == V_SETTINGS && event == V_LONG) {
             if (m->editing) m->editing=false;
@@ -160,6 +162,7 @@ unsigned vibe_model_key(vibe_model_t *m, vibe_key_t key, vibe_event_t event, uin
             if (key == V_DOWN && m->selected<V_SETTING_COUNT-1) { ++m->selected; m->reset_confirm=false; }
             if (key == V_SETTINGS) {
                 if (m->selected==V_SETTING_WIFI) return V_START_PROVISION;
+                if (m->selected==V_SETTING_PAIR) { m->page=V_PAIR;return 0; }
                 if (m->selected==V_SETTING_UNPAIR) {
                     if (!m->reset_confirm) { m->reset_confirm=true; return 0; }
                     m->reset_confirm=false; return V_UNPAIR;
@@ -168,6 +171,10 @@ unsigned vibe_model_key(vibe_model_t *m, vibe_key_t key, vibe_event_t event, uin
             }
         } else if (key == V_SETTINGS) m->editing=false;
         else {
+            if (m->selected==V_SETTING_WIFI_ENABLED || m->selected==V_SETTING_BLE_ENABLED) {
+                bool *v=m->selected==V_SETTING_WIFI_ENABLED?&m->wifi_enabled:&m->ble_enabled;
+                *v=key==V_UP;return V_WIRELESS_CHANGED;
+            }
             if (m->selected==V_SETTING_THEME) {
                 m->theme_mode=(vibe_theme_mode_t)((m->theme_mode+(key==V_UP?2:1))%3);
                 return V_PREFS_CHANGED;

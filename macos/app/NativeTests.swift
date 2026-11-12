@@ -2,9 +2,33 @@ import Foundation
 
 enum NativeTests {
     static func run() {
+        if let i=CommandLine.arguments.firstIndex(of:"--relay-error-probe"),CommandLine.arguments.count>i+1 { RadioRelayTests.probeError(CommandLine.arguments[i+1]);return }
+        if let i=CommandLine.arguments.firstIndex(of:"--relay-probe"),CommandLine.arguments.count>i+1 { RadioRelayTests.probe(CommandLine.arguments[i+1]);return }
         if CommandLine.arguments.contains("--agent-tests") { AgentTests.run();return }
         func check(_ yes:Bool,_ description:String) { if !yes { fputs("FAIL: \(description)\n",stderr);exit(1) } }
         LANTests.run(check)
+        BLETests.run(check)
+        Engine.testConnectionDispatch(check)
+        RadioRelayTests.run(check)
+        DiagnosticsTests.run(check)
+        var connection=ConnectionState()
+        connection.connected=true;connection.paired=true;connection.owned=true
+        connection.wifiConnected=true;connection.bleConnected=true;connection.transport="Wi-Fi"
+        check(connection.connectionTitle=="已连接到本机" && !connection.permission && !connection.audio,"voice setup never changes successful connection status")
+        check(connection.linkStatus(.wifi)=="使用中" && connection.linkStatus(.ble)=="已连接","both links are distinguished from the selected route")
+        connection.bleConnected=false;connection.bluetoothPhase = .parked
+        check(connection.linkStatus(.ble)=="待机","parked Bluetooth is not falsely connected")
+        connection.bluetoothPhase = .unauthorized
+        check(connection.linkStatus(.ble)=="未授权" && connection.linkStatus(.wifi)=="使用中","Bluetooth permission does not hide healthy Wi-Fi")
+        connection.owned=false;connection.ownerName="Other computer"
+        check(connection.connectionTitle.contains("Other computer") && connection.linkStatus(.wifi)=="已连接","reachable other-owner device is not labeled in use by this computer")
+        connection.bleEnabled=false
+        check(connection.linkStatus(.ble)=="已关闭","device wireless setting is separate from discovery")
+        connection.connected=false;connection.wifiConnected=false
+        check(connection.connectionTitle=="设备未连接" && connection.linkStatus(.wifi)=="未连接","disconnected route never remains in use")
+        check(connection.canClaim,"paired inactive BLE computer can request takeover without a connected route")
+        connection.owned=true;check(!connection.canClaim,"current owner needs no takeover action")
+        connection.owned=false;connection.paired=false;check(!connection.canClaim,"unpaired device cannot offer authenticated takeover")
         check(VoiceCodec.decode(Data(repeating:0,count:803))==nil,"short ADPCM block")
         var block=Data(repeating:0,count:804);block[2]=89
         check(VoiceCodec.decode(block)==nil,"invalid ADPCM step index")

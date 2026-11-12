@@ -15,7 +15,7 @@ NOTICES = (
     ("agent-notify adapter reference", "assets/licenses/agent-notify.txt"),
     ("agent-notify-dsh adapter reference", "assets/licenses/agent-notify-dsh.txt"),
     ("PeonPing adapter reference", "assets/licenses/peon-ping.txt"),
-    ("ESP Audio Codec 2.5.0 (Espressif Modified MIT)", "assets/licenses/esp-audio-codec-2.5.0.txt"),
+    ("FFmpeg 8.0.3 radio subprocess (LGPL-2.1-or-later)", "assets/licenses/ffmpeg-lgpl-2.1.txt"),
     ("LVGL 9.5.0", "assets/licenses/lvgl-9.5.0.txt"),
     ("LVGL TLSF allocator, Matthew Conte", "assets/licenses/lvgl-tlsf.txt"),
     ("LVGL printf, Marco Paland", "assets/licenses/lvgl-sprintf.txt"),
@@ -39,12 +39,14 @@ ESP-IDF 5.5.3, including Wi-Fi and PHY libraries (Apache-2.0):
 https://github.com/espressif/esp-idf/tree/v5.5.3
 Espressif esp_codec_dev 1.6.2, esp_lvgl_port 2.9.0, button 4.2.0,
 and cmake_utilities 1.1.1 (Apache-2.0): https://components.espressif.com/
-ESP Audio Codec 2.5.0 (Espressif Modified MIT; Espressif products only):
-https://components.espressif.com/components/espressif/esp_audio_codec/versions/2.5.0
-MP3 and AAC decoder copyright: Copyright (c) 2005-2008,
-The Android Open Source Project (Apache-2.0), as identified by Espressif:
-https://docs.espressif.com/projects/esp-adf/en/latest/COPYRIGHT.html
 LVGL 9.5.0: https://github.com/lvgl/lvgl/tree/v9.5.0
+
+The desktop app uses a separate FFmpeg 8.0.3 executable under LGPL-2.1-or-later:
+https://ffmpeg.org/
+Its corresponding unmodified source archive, license and exact build recipe are
+included inside the app at Contents/Resources/RadioDecoderSource/. The app does
+not link against FFmpeg libraries; the bundled executable is replaceable.
+No GPL/nonfree components or external codec libraries are enabled.
 
 These notices cover the desktop app and accompanying device firmware.
 BlackHole and the input method are separately installed, not bundled.

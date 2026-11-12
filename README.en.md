@@ -25,7 +25,7 @@ Windows is not supported yet.**
 | **Know when your Agent needs you** | Screen and sound alerts for completion, approval, questions, or errors, depending on the Agent. The compact notice disappears after five seconds; a button dismisses it and still performs its usual action. |
 | **Stay with your focus** | Start, pause, and resume a Pomodoro with one button. Each completed phase leads to the next, waiting for you to start it. Voice remains available. |
 | **Glance at the weather** | Current conditions, six-hour temperature and rain, air quality and wind, and a three-day forecast. Turn pages manually, with light and dark themes. |
-| **Listen to your stations** | Play Internet radio on the device. Search, check, add, and reorder stations in the desktop app. Speaking interrupts radio; listening reconnects afterwards. |
+| **Listen to your stations** | Listen to Internet radio relayed by the online desktop companion over Wi-Fi or BLE. Search, check, add, and reorder stations in the desktop app. Speaking interrupts radio; listening reconnects afterwards. |
 | **Leave configuration to the computer** | Adjust brightness, volume, themes, timer durations, and weather city. The client lives in the menu bar and leaves the Dock when its window closes. |
 
 ![Vibe Companion weather, Pomodoro, radio and Agent alerts](assets/brand/vibe-companion-screens.png)

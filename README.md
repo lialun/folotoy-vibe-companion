@@ -96,7 +96,7 @@ xattr -dr com.apple.quarantine "/Applications/Vibe 伴侣.app"
 
 - **已实现：** ESP32-C3 固件和 macOS 客户端，Windows／Linux 客户端尚未实现。
 - **验证范围：** 开发期间已在 Apple Silicon 和目标设备上测试；Intel 版本已交叉编译，
-  Intel 实机和干净系统安装仍待验证。收音机可用性取决于电台源、音频格式、网络及设备资源。
+  Intel 实机和干净系统安装仍待验证。收音机由电脑转发，需客户端运行且电脑联网；支持 Wi-Fi 与 BLE，播放效果取决于电台源和链路。
 
 ## 开发与贡献
 

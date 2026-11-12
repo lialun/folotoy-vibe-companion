@@ -37,6 +37,20 @@ enum PairingStore {
             return true
         } catch { return false }
     }
+    static func clientID(directory:URL=directory)throws->String {
+        let file=directory.appendingPathComponent("client-id")
+        if let data=try? Data(contentsOf:file),let value=String(data:data,encoding:.utf8),value.count==32,value.allSatisfy({"0123456789abcdef".contains($0)}) { return value }
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let value=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
+        try Data(value.utf8).write(to:file,options:.atomic)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
+        return value
+    }
+    static func computerName(_ value:String)->String {
+        var result=String(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        while result.utf8.count>63 { result.removeLast() }
+        return result.isEmpty ? "Computer" : result
+    }
     static func random()->String {
         var generator=SystemRandomNumberGenerator()
         return (0..<32).map { _ in String(format:"%02x",UInt8.random(in:0...255,using:&generator)) }.joined()

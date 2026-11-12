@@ -104,9 +104,34 @@ run_static_checks() {
         tests/vibe/test_wire.c main/vibe/adpcm.c main/vibe/protocol.c -lm \
         -o "${test_dir}/test_vibe_wire"
     "${test_dir}/test_vibe_wire"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
+        tests/vibe/test_radio_relay.c main/vibe/adpcm.c -o "${test_dir}/test_vibe_relay"
+    "${test_dir}/test_vibe_relay"
+    "${CC:-cc}" -std=c11 -Wno-deprecated-declarations -Itests/vibe/vendor/cjson -c \
+        tests/vibe/vendor/cjson/cJSON.c -o "${test_dir}/vibe_json.o"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/diagnostic_stubs -Itests/vibe/relay_stubs -Itests/vibe/connection_stubs -Itests/vibe/stubs -Itests/audio_stubs \
+        -Itests/vibe/vendor/cjson -Imain/vibe tests/vibe/test_diagnostics.c "${test_dir}/vibe_json.o" -o "${test_dir}/test_vibe_diagnostics"
+    "${test_dir}/test_vibe_diagnostics"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/relay_stubs -Itests/vibe/connection_stubs -Itests/vibe/stubs -Itests/audio_stubs \
+        -Icomponents/bsp/include -Itests/vibe/vendor/cjson -Imain/vibe \
+        tests/vibe/test_relay_session.c main/vibe/adpcm.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_relay_session"
+    "${test_dir}/test_vibe_relay_session"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
         tests/vibe/test_peer.c -o "${test_dir}/test_vibe_peer"
     "${test_dir}/test_vibe_peer"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
+        tests/vibe/test_hosts.c main/vibe/hosts.c main/vibe/ble_frame.c -o "${test_dir}/test_vibe_hosts"
+    "${test_dir}/test_vibe_hosts"
+    "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/connection_stubs -Itests/vibe/stubs -Itests/audio_stubs -Itests/vibe/vendor/cjson -Imain/vibe \
+        tests/vibe/test_connections.c main/vibe/hosts.c tests/vibe/vendor/cjson/cJSON.c -lm -o "${test_dir}/test_vibe_connections"
+    "${test_dir}/test_vibe_connections"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/ble_stubs -Itests/vibe/connection_stubs -Itests/vibe/stubs -Itests/audio_stubs -Imain/vibe \
+        tests/vibe/test_ble_runtime.c main/vibe/hosts.c main/vibe/ble_frame.c -o "${test_dir}/test_vibe_ble_runtime"
+    "${test_dir}/test_vibe_ble_runtime"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
         tests/vibe/test_wifi_profiles.c main/vibe/wifi_profiles.c -o "${test_dir}/test_vibe_wifi_profiles"
     "${test_dir}/test_vibe_wifi_profiles"

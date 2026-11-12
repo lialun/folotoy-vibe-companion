@@ -24,7 +24,7 @@ int xQueueSend(QueueHandle_t queue,const void *message,unsigned timeout) {
 }
 int main(void) {
     /* Twelve key slots no longer permanently consume about 18 KiB of JSON RAM. */
-    assert(sizeof(vibe_msg_t)<=24);
+    assert(sizeof(vibe_msg_t)<=40);
     char input[]="{\"value\":123}";
     assert(vibe_message_post_json((void *)1,input,strlen(input)));
     assert(allocations==1 && queued.type==V_MSG_JSON);

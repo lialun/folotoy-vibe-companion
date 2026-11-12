@@ -25,13 +25,13 @@ struct AgentSettingsView:View {
                             Button(row.installed ? "移除集成" : "安装集成") { center.change(row,install:!row.installed) }.disabled(center.busy || !row.detected || preview)
                         }
                     }
-                    let seen=center.recent.first{$0.agent==row.agent}
                     HStack(spacing:6) {
-                        Circle().fill(seen != nil ? Color.green : row.installed ? Color.orange : Color.gray).frame(width:5,height:5)
-                        Text(seen != nil ? "已收到事件" : row.installed ? "已安装 · 等待事件验证" : row.detected ? "已检测到" : "未检测到").font(.system(size:11))
+                        Circle().fill(!row.issue.isEmpty ? Color.orange : row.installed ? Palette.accent : Color.gray).frame(width:5,height:5)
+                        Text(row.status).font(.system(size:11))
                         Spacer()
-                        Text([row.executable != nil ? "终端" : "",row.application != nil ? "桌面版" : ""].filter{!$0.isEmpty}.joined(separator:" · ")).font(.system(size:10)).foregroundStyle(.secondary)
+                        Text(row.detected ? [row.executable != nil ? "终端" : "",row.application != nil ? "桌面版" : ""].filter{!$0.isEmpty}.joined(separator:" · ") : "未找到程序").font(.system(size:10)).foregroundStyle(.secondary)
                     }
+                    if !row.issue.isEmpty { Text(row.issue).font(.system(size:11)).foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true) }
                     if row.agent == .dsh,row.detected {
                         let directory=PairingStore.directory.appendingPathComponent("agents/vibe-companion-dsh")
                         let prepared=FileManager.default.fileExists(atPath:directory.appendingPathComponent("package.json").path)

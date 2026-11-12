@@ -133,8 +133,8 @@ change; playback itself is static, and voice/status/key rails stay fixed.
 Rapid changes replace the active animation rather than queueing. Voice, sleep,
 navigation and palette replacement cancel it before teardown. Reuse labels and
 fonts without a raster canvas, transparent layer or task.
-A Mac probe passing means recognized audio was received on Mac. Only successful
-device PCM playback earns the separate device-verified mark. Neither promises
+A Mac probe checks a custom source before adding it. My stations shows names
+and ordering controls without successful-playback badges; a probe never promises
 future availability. Empty lists and unsupported streams have explicit states.
 
 ## 6. Device visual system
@@ -379,7 +379,13 @@ Audio is routed live, not saved by this project. macOS Accessibility is a separa
 OS permission for synthetic keyboard events. Shortcuts are ordinary key events
 and can conflict with other software or be blocked by secure input.
 
-Currently one device / one computer is supported. Multi-computer switching and remote playback control are outside this version's contract. Agent notifications follow the integration contract below.
+One device remembers multiple computers, with exactly one active owner. Wi-Fi
+and BLE authenticate the same persistent computer identity; discovery cannot
+take over a healthy connection. The user can explicitly switch to a paired
+computer. Wireless toggles control availability; routing is automatic. See the
+[connection contract](connections.md) for leases, reconnection, memory and power
+rules. Remote radio playback control remains outside the product contract.
+Agent notifications follow the integration contract below.
 
 ## 9. Resource ownership and power
 
@@ -393,11 +399,9 @@ resources are released, then another task deletes the finished worker and
 reclaims its **8 KiB stack**. Audio cancels and joins that worker before using its
 resources. Sleeping or suspending a task alone does not reclaim its stack.
 
-Radio owns disposable source/HTTP, decoder, FIFO and output resources. Join its
-reader before releasing memory. Voice ends the radio session before capture;
-after voice, rebuild radio only if listening was previously requested. A paused
-radio stays paused. Do not retain large radio resources merely to avoid a
-reconnection unless the measured RAM and energy budget supports it.
+Radio owns only its disposable compressed FIFO. Voice ends the session and
+releases the FIFO before capture; listening restarts only when still requested.
+The computer owns source connections, decoding and its larger bounded cache.
 
 Every allocation needs one owner, a lifetime and a failure policy:
 
@@ -407,7 +411,7 @@ Every allocation needs one owner, a lifetime and a failure policy:
 | Core task stacks, 33 KiB total | Main, audio, network, LVGL / application lifetime | Measure worst paths before resizing; do not add a permanent task per page |
 | LVGL pool 26 KiB + display DMA 9,600 B | UI / application lifetime | Rebuild module objects inside the pool; keep DMA requirements distinct from ordinary heap |
 | Weather stack 8 KiB and HTTP/TLS/body/parse workspace | Disposable weather worker / one update | Cancel, clean up, externally join/delete before audio; allocation failure defers weather |
-| Radio workspace, decoder and HTTP | Audio owner / one radio session | Join reader, then release on voice/pause/exit/failure; stop repeated memory-failure retries |
+| Radio compressed FIFO, 15,704 / 23,556 B | Audio owner / one session | Detach callbacks before freeing; release on voice/exit/change/failure; retain 16 KiB headroom |
 | Wi-Fi credential bank, 487 B | Network service / application lifetime | Five profiles; separate mutex; serialize at most 491 payload bytes on existing worker stacks, save before replacing; never return passwords through LAN/portal reads |
 | Saved station list | Catalog / application lifetime | Allocate `12 + 306 × count` bytes (maximum 6,132), not a permanent 20-slot array; store only actual null-terminated names/URLs in NVS; accept legacy 16-slot blobs |
 | Station-list transfer staging | Configuration transaction / bounded transfer | Allocate by incoming count only while audio is idle; cancel before audio starts; promote the staged list on atomic commit without another full-size copy; preserve the old list on failure; expire abandoned transfers |
@@ -422,59 +426,36 @@ entry/exit and voice interruption. A successful single allocation does not
 establish an adequate memory budget. Resource-policy changes require lifecycle,
 allocation-failure and repeated-cleanup tests plus a device regression check.
 
-MP3 uses a 4,608-byte output block, 1 KiB input and a
-5 KiB reader stack, plus decoder and network allocations. AAC/TS starts with an
-8 KiB output block; after the first frame, compact it to 4,608 bytes if that frame
-fits. Failed compaction retains the original block and PCM. For every format,
-choose three, two or one independent 8 KiB blocks using measured post-codec/
-post-I2S free heap: prefer 24 KiB, fall back to 16 or 8 KiB and retain a 16 KiB
-control/network margin. Allocate the required reader stack first. Failure of
-the second/third block keeps the smaller working FIFO; check actual remaining
-heap afterward, releasing trailing blocks if needed. Reject startup if even
-the minimum would consume the margin. This is an admission budget, not a promise that a
-future allocation or arbitrary broadcaster will succeed. No all-free-heap buffer allocation: reserve room
-for Wi-Fi/lwIP, control messages, audio hardware and allocator fragmentation.
-Fonts in Flash are not reclaimable heap; free LVGL objects stay within LVGL's
-separate pool. Do not reduce stacks or pools without worst-path measurements.
+Radio is relayed by the active computer over its selected Wi-Fi or BLE route.
+The computer fetches and decodes MP3/AAC/HLS, resamples to 24 kHz mono and sends
+independent 50 ms IMA ADPCM blocks. The device needs no radio HTTP/HLS/TLS,
+AAC/MP3 decoder, reader task or separate PCM workspace. It reuses the resident
+3,200-byte voice PCM block while not recording. The computer must remain awake,
+online and running the companion; device Wi-Fi may be off for BLE listening.
 
-Keep optional non-ISR FreeRTOS/ring-buffer functions in Flash and disable the
-Wi-Fi IRAM throughput optimizations to recover shared internal SRAM. Preserve
-IRAM-required interrupt paths, stack guards, display/audio buffers and the Wi-Fi
-sleep policy. Recheck voice latency, sustained reception and battery use after
-changing code placement; a smaller IRAM image does not prove equal performance.
-Enable dynamic TLS buffers and release handshake configuration and peer
-certificates when no longer needed. Short weather requests use dynamic RX;
-radio selects the SDK's post-handshake static RX strategy. It reserves the full
-receive-record block before codec/FIFO allocation, retaining it for that HTTP
-connection to prevent repeated large-block allocation during playback. TX stays
-dynamic, and closing the connection releases RX. Certificate validation stays
-enabled; do not shrink accepted TLS records merely to fit one broadcaster.
+The device owns two or three disposable 7,852-byte segments (26 or 39 frames,
+15,704 or 23,556 bytes, approximately 1.3 or 1.95 seconds). Initialize the audio
+format before admission, retain 16 KiB of control/network heap, and reject
+startup if two segments cannot fit. No permanent queue/task is added per station.
+Cumulative credits bound the sender to available receiver capacity; duplicates,
+gaps, wrong routes and expired streams cannot grow the FIFO. Each session gets
+a new random stream number, bound to the current owner route and lease. Credits
+repeat every 200 ms while listening; the desktop retries the first missing block
+without enlarging the window. There is no audio polling or relay process at idle.
 
-Register only the MP3/AAC codecs and TS container that the source path accepts.
-Always unregister partially installed registries after a failed registration.
-Direct streams reserve the real frame decoder before playback buffers. All
-streams allocate input/output first, decode their first PCM frame to establish
-the actual codec, initialize I2S, then budget and allocate FIFO blocks and the reader stack. Preserve that
-PCM and any unconsumed input, and carry ICY filter state into the reader. Bound
-priming input to 64 KiB and check a fifteen-second deadline between reads;
-transport calls still have their own bounded cancellation/connection behavior.
-Do not reserve both an MP3 and AAC decoder for an unknown container. Report
-phase-specific free/largest heap values without adding a resident history ring.
-When a decoder outputs buffered PCM with zero newly consumed input bytes,
-resubmit the same unconsumed input. Only a call with neither consumed input nor
-PCM allows at most eight consecutive parser-state transitions before a
-no-progress failure. Never discard the rest of a TS/PES packet merely
-because that call drained an internally buffered audio frame.
+The computer keeps at most 200 encoded blocks (about 118 KiB / 10 seconds),
+using producer backpressure. It bundles a hash-pinned, minimal LGPL FFmpeg
+subprocess, its corresponding source archive, license and exact build recipe;
+no Homebrew installation or runtime binary download. HTTP/HTTPS are the only
+station inputs. Stop the process, queued downlink packets and receiver session
+on voice, exit, station/owner/route change or failure. Voice resumes live radio
+through a new stream after release. Enforce bounded connection/read deadlines
+and process teardown; never retain radio buffers merely to accelerate resume.
 
-Preserve full HLS playlist URLs, including session/signature queries, on every
-refresh and redirect. Resolve `Location` against the last full URL before giving
-IDF an absolute destination; IDF 5.5.3's URL getter omits queries. Reuse playlist
-line scratch for segment destinations and the existing task stacks for redirect
-scratch. Never log signed URLs. Accept bounded master variants up to 384 kbit/s
-without `CODECS` when no video is advertised, then verify real media bytes and
-the first audio frame. Keep explicit video/unsupported-codec rejection and the
-normal codec/memory admission checks. Master bandwidth includes transport
-overhead; it is not the decoded PCM rate or a required FIFO allocation size.
+Preserve required interrupt code, stack guards, display/audio DMA and modem
+sleep. Weather retains authenticated HTTPS and dynamic TLS buffers. Smaller
+firmware and fewer device allocations do not establish battery-current savings;
+measure both real transports, voice preemption and prolonged listening.
 
 New paired clients negotiate a 10-second combined readiness/time beacon and
 30-second peer expiry. The installed firmware accepts 5–30 seconds; its hello
@@ -530,8 +511,12 @@ longest call, USB/key-wake status, fresh SOC/mV and bounded lock history. No new
 sampling timer/task/history ring or Flash writes. The public PM exit callback
 uses the pinned SDK sleep context to exclude rejected/skipped calls. IDF PM
 profiling adds per-lock counters; the SDK-private context must be revalidated
-when upgrading IDF. The desktop Connection page keeps diagnostics expanded,
-with manual Read, Reset and Copy actions; never poll it automatically.
+when upgrading IDF. The desktop Connection page keeps a single Device status panel expanded, with
+runtime statistics above saved events and one combined Copy report action. Read
+and Reset stay manual; never poll statistics automatically. Saved events remain
+available when disconnected. Connection indicators separately show Wi-Fi and
+Bluetooth reachability and the active route; voice permission/driver failures
+belong in the voice section and never change the successful connection title.
 Separate window totals, instantaneous readings and boot-cumulative counters.
 Group identically named lock types, preserve each duration without summing
 overlapping intervals, and retain raw lock records in the copied report.
@@ -584,6 +569,36 @@ instant radio recovery without device timing. Current/energy improvements need
 instrument measurements, not inference from lower task counts.
 
 ## 10. Change and acceptance rules
+
+### Bounded diagnostic contract
+
+Device diagnostics use eight 24-byte typed entries plus two counters: a fixed
+200-byte ring and small synchronization/announcement state. No new task, timer,
+Flash writes, message-string cache, or continuous heap sampling is permitted.
+Capture heap size/largest block only when recording an event. Reuse the network
+worker to announce new data and the authenticated current-owner control channel
+to fetch batches of at most three. Existing status replies advertise the newest
+sequence so dropped announcements are repaired without a separate heartbeat.
+Voice defers desktop catch-up requests. A reconnect fetches the surviving window;
+boot identity and sequence deduplicate retries. Explicitly mark offline overflow.
+The RAM window does not promise persistence across device reset or power loss.
+
+The desktop owns durable history: at most 500 validated records and a 512 KiB file
+limit, asynchronous serial file I/O, atomic replacement, account-local access.
+Preserve unreadable files and report storage failure rather than silently clearing
+evidence. Keep code, numeric detail, stream, transport, receipt time, uptime,
+heap counters and firmware/ELF identity. Do not persist arbitrary event bodies,
+URLs, credentials, addresses, transcripts, user paths or raw decoder stderr.
+Decoder stderr is drained into a temporary 4 KiB buffer only while playing and
+classified into fixed error codes and an optional HTTP status. Known preset names
+may be shown; custom names are omitted. The report uses the same typed whitelist.
+Normal heartbeats, audio blocks and successful keys are not diagnostic records.
+
+Radio errors on both sides share a stream number. A source error and its resulting
+device stop remain separate evidence; UI should not disguise them as independent
+station failures or discard one. Reset reasons establish a restart, not its full
+call stack. Radio diagnostics must not be presented as proof of network, memory
+or power causes without matching measurements.
 
 A substantial new interaction or visual direction is first shown as native-size
 static states and discussed before implementation. Preserve approved controls

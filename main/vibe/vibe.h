@@ -16,7 +16,19 @@ extern "C" {
 #endif
 
 #define VIBE_PORT 33333
+/* One retained checkpoint, not a history or an allocation reservation.
+ * Phase always refers to a static string in Flash. Protected by v_mutex. */
 typedef struct {
+    const char *phase;
+    int32_t result;
+    uint32_t free,largest;
+} vibe_radio_diagnostic_t;
+typedef struct {
+    bool wifi_enabled,ble_enabled;
+    unsigned paired_count;
+    vibe_link_t link;
+    vibe_route_t ble_peer;
+    char computer[64];
     bool wifi, peer, audio_ready, hotkey_ready, audio_busy, audio_fault, provisioning;
     bool radio_playing, radio_loading;
     unsigned radio_state;
@@ -33,6 +45,7 @@ typedef struct {
     char ip[16], weather[96], notice[96], ap_name[33], pair_code[7];
     char token[65], device_id[18];
     uint64_t peer_seen_ms, weather_at_ms, weather_attempt_ms, air_at_ms, air_attempt_ms;
+    vibe_radio_diagnostic_t radio_diagnostic;
 } vibe_status_t;
 extern vibe_model_t v_model;
 extern vibe_prefs_t v_prefs;

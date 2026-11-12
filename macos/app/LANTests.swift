@@ -31,7 +31,7 @@ enum LANTests {
             check(body["idleHeartbeat"] as? Int==10,"wire interval agrees with local cadence and installed firmware negotiation")
             check(body["port"] as? Int==Int(client.port) && body["type"] as? String=="pc.status" && body["audioReady"] as? Bool==true && body["hotkeyReady"] as? Bool==false,"one beacon carries readiness and actual client port")
             let unpaired=LANSocket.beacon(port:client.port,token:"",audioReady:true,hotkeyReady:true,epoch:1800000000,tz:480)
-            check(unpaired["token"]==nil && unpaired["type"]==nil,"unpaired discovery cannot publish authenticated status")
+            check(unpaired["token"]==nil && unpaired["type"] as? String=="discover","unpaired discovery cannot publish authenticated status")
             var beacon=Data([3]);beacon.append(try JSONSerialization.data(withJSONObject:body))
             check(LANSocket.send(beacon,from:client.descriptor,to:loopback(server.port)),"send discovery from selected socket")
             let (received,from)=try receive(server.descriptor)

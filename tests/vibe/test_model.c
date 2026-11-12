@@ -147,6 +147,7 @@ static void settings_bounds(void) {
 
 }
 static unsigned enter_radio(vibe_model_t *m,uint64_t t) {
+    m->wifi_available=true;
     hold(m,V_SETTINGS,t);tap(m,V_DOWN,t+800);return tap(m,V_SETTINGS,t+900);
 }
 static void radio_home(void) {
@@ -223,7 +224,8 @@ static void theme_controls(void) {
     assert(tap(&m,V_UP,3000)==V_PREFS_CHANGED && m.theme_mode==V_THEME_SCHEDULED);
     assert(m.brightness==50 && m.volume==80 && m.screen_seconds==15);
     assert(tap(&m,V_SETTINGS,3100)==0 && !m.editing);
-    tap(&m,V_DOWN,3200);assert(m.selected==V_SETTING_WIFI);
+    for (unsigned i=V_SETTING_THEME;i<V_SETTING_WIFI;i++) tap(&m,V_DOWN,3200+i*10);
+    assert(m.selected==V_SETTING_WIFI);
     assert(tap(&m,V_SETTINGS,3300)==V_START_PROVISION);
     tap(&m,V_DOWN,3400);assert(m.selected==V_SETTING_UNPAIR);
     assert(tap(&m,V_SETTINGS,3500)==0 && m.reset_confirm);

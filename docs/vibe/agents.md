@@ -19,8 +19,10 @@ plays its existing chime. Voice retains priority. No cloud push account is neede
 | Qwen Code | User command hooks | Stop, PermissionRequest, supported question-only PreToolUse |
 
 These are adapter capabilities, not a claim that every release or entry point
-has passed an end-to-end test. The app distinguishes detection, installation,
-and receipt of a real event. Gemini and ZCode have no general structured-question
+has passed an end-to-end test. Integration status is Installed, Not installed,
+or Error, based on native configuration. Recent events are shown separately;
+no event is required to confirm installation. Unreadable configuration or missing
+plugin files produce an error. Gemini and ZCode have no general structured-question
 callback configured. Codex tool hooks can have coverage exceptions. A Stop hook
 reports its own stop boundary, not proof that another plugin will not continue
 work. The first alert is forwarded immediately. For one Agent and known session,
@@ -92,7 +94,11 @@ installs into the `web` profile using DSH's own plugin command. The desktop
 profile is owned by DSH's app; add the staged directory in its plugin manager.
 After preparation, click **Copy plugin path**, open **Plugins > Add plugin** in
 DSH, paste the path and click **Install**. Use **Show plugin** to locate it in Finder.
-Staging alone is not shown as a successful installation. It does not hand-edit
+Staging alone is not shown as a successful installation. The app reads profile
+`package.json` files under `$DSH_HOME/profiles` (default `~/.dsh/profiles`), checking
+`dsh.profile.bundles` registration and the installed package entry/patch files.
+Desktop and terminal profiles are supported. Detection runs on startup and when
+the app becomes active; it does not depend on receiving an event. It does not hand-edit
 DSH package-manager lockfiles or a desktop profile behind the application's back.
 
 A test alert checks companion-to-device delivery only. Receipt of a real event

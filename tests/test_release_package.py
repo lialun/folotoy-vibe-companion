@@ -62,7 +62,7 @@ class ReleasePackageTests(unittest.TestCase):
 
     def test_notices_retain_firmware_and_font_licenses(self) -> None:
         notices = (self.output / "THIRD_PARTY_NOTICES.txt").read_text()
-        for phrase in ("Espressif Modified MIT", "Matthew Conte", "Marco Paland",
+        for phrase in ("FFmpeg 8.0.3", "LGPL-2.1-or-later", "RadioDecoderSource", "Matthew Conte", "Marco Paland",
                        "Montserrat", "Font Awesome", "Apache License", "cJSON"):
             self.assertIn(phrase, notices)
         self.assertNotIn(str(ROOT), notices)

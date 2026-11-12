@@ -3,7 +3,6 @@ import SwiftUI
 struct PowerDiagnosticsView:View {
     let state:ConnectionState
     let read:(Bool)->Void
-    let copy:(String)->Void
     var body:some View {
         VStack(alignment:.leading,spacing:16) {
             HStack {
@@ -16,9 +15,6 @@ struct PowerDiagnosticsView:View {
                     .disabled(unavailable)
                 Button("重新计时") { read(true) }.disabled(unavailable)
                     .help("只重置本轮睡眠统计；电源锁时长仍从开机累计。")
-                Button { if let snapshot=state.powerSnapshot { copy(snapshot.textReport) } } label: { Image(systemName:"doc.on.doc") }
-                    .disabled(state.powerSnapshot==nil).help("复制精简诊断数据，供大模型分析；保留原始精度和电源锁明细")
-                    .accessibilityLabel("复制诊断报告")
             }.font(.system(size:11))
             if !state.powerError.isEmpty {
                 Text(state.powerError).font(.system(size:12)).foregroundStyle(.orange)
@@ -26,12 +22,12 @@ struct PowerDiagnosticsView:View {
             if let snapshot=state.powerSnapshot {
                 content(snapshot)
             } else {
-                Text("拔掉 USB，让设备息屏运行 5–10 分钟，再读取统计。通过 Wi-Fi 获取，无需接线。")
+                Text("拔掉 USB，让设备息屏运行 5–10 分钟，再读取统计。通过当前连接读取，无需接线。")
                     .font(.system(size:12)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
             }
         }
     }
-    private var unavailable:Bool { state.powerLoading || !state.connected || state.recording }
+    private var unavailable:Bool { state.powerLoading || !state.connected || !state.owned || state.recording }
     private func content(_ s:PowerSnapshot)->some View {
         VStack(alignment:.leading,spacing:16) {
             if s.usb==true {

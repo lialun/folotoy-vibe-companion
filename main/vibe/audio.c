@@ -1,5 +1,8 @@
 #include "vibe.h"
+#include "transport.h"
 #include "radio/catalog_service.h"
+#include "radio/relay.h"
+#include "diagnostics.h"
 #include "adpcm.h"
 #include "ui_sfx.h"
 #include "bsp_audio.h"
@@ -31,7 +34,7 @@ bool vibe_audio_request(unsigned action) {
 }
 static bool radio_cancel(void) {
     vibe_model_t m; vibe_status_t s; vibe_snapshot(&m,NULL,&s);
-    return pending() || !m.radio_active || !m.radio_requested || !s.wifi || s.provisioning;
+    return pending() || !m.radio_active || !m.radio_requested || !s.peer || s.provisioning;
 }
 static void set_busy(bool yes) {
     xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.audio_busy=yes; xSemaphoreGive(v_mutex);
@@ -40,7 +43,7 @@ static bool prepare_audio(const char *operation) {
     esp_err_t result=bsp_audio_init();
     if (result==ESP_OK) result=bsp_audio_wake();
     xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.audio_fault=result!=ESP_OK; xSemaphoreGive(v_mutex);
-    if (result!=ESP_OK) ESP_LOGE(TAG,"%s preparation failed: %s",operation,esp_err_to_name(result));
+    if (result!=ESP_OK) { ESP_LOGE(TAG,"%s preparation failed: %s",operation,esp_err_to_name(result));vibe_diagnostics_record(V_DIAG_AUDIO_PREPARE,result); }
     return result==ESP_OK;
 }
 static void alarm_play(int16_t *pcm) {
@@ -61,13 +64,13 @@ static void capture(int16_t *pcm) {
     vibe_prefs_t p; vibe_model_t m; vibe_status_t s;
     vibe_snapshot(&m,&p,&s);
     if (!m.recording || !m.voice_ready) return;
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    if (s.wifi && s.link==V_LINK_WIFI) esp_wifi_set_ps(WIFI_PS_NONE);
     bool started=false,failed=false;
     if (prepare_audio("capture") && bsp_audio_set_format(16000,16,1)==ESP_OK && bsp_audio_set_input_gain(p.mic_gain)==ESP_OK) {
         bsp_audio_set_volume(0); /* I2S duplex clocks remain active; no speaker feedback. */
         portENTER_CRITICAL(&request_mux);uint64_t requested=voice_requested_at;portEXIT_CRITICAL(&request_mux);
         if (requested) ESP_LOGI(TAG,"Voice capture ready: latency_ms=%llu",(unsigned long long)(vibe_now()-requested));
-        vibe_send_json("{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\"}");
+        if (!vibe_transport_voice_begin()) goto finished;
         started=true;
         /* Give the Mac time to press the shortcut before the first 100ms block. */
         vTaskDelay(pdMS_TO_TICKS(80));
@@ -86,17 +89,19 @@ static void capture(int16_t *pcm) {
             }
         }
     } else failed=true;
+finished:
     if (started) {
         /* This event and data use one socket; Mac has a 180ms audio-drain grace. */
-        vibe_send_json("{\"event\":\"voice.end\"}");
+        vibe_transport_voice_end();
     }
     if (failed) {
         ESP_LOGE(TAG,"Capture failed; next UP press may retry");
+        vibe_diagnostics_record(V_DIAG_AUDIO_CAPTURE,0);
         vibe_msg_t msg={.type=V_MSG_AUDIO_FAIL}; xQueueSend(v_queue,&msg,pdMS_TO_TICKS(100));
     } else {
         xSemaphoreTake(v_mutex,portMAX_DELAY); v_model.recording=false; xSemaphoreGive(v_mutex);
     }
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    if (s.wifi) esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 }
 static void process_audio(unsigned actions) {
     /* Join the optional weather worker before allocating/using audio resources. */
@@ -116,7 +121,7 @@ static void process_audio(unsigned actions) {
         char url[257];vibe_radio_url(url,sizeof(url));
         vibe_radio_status(V_RADIO_CONNECTING,"");
         uint64_t started=vibe_now();
-        const vibe_radio_result_t result=vibe_radio_session(url,radio_cancel);
+        const vibe_radio_result_t result=vibe_relay_play(url,radio_cancel,capture_pcm);
         if (radio_cancel()) break;
         if (result==V_RADIO_SESSION_NO_MEMORY) {
             xSemaphoreTake(v_mutex,portMAX_DELAY);v_model.radio_requested=false;xSemaphoreGive(v_mutex);
@@ -138,6 +143,7 @@ static void process_audio(unsigned actions) {
     esp_err_t result=bsp_audio_sleep();
     if (result!=ESP_OK) {
         ESP_LOGE(TAG,"Idle suspend failed: %s",esp_err_to_name(result));
+        vibe_diagnostics_record(V_DIAG_AUDIO_SLEEP,result);
         xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.audio_fault=true;xSemaphoreGive(v_mutex);
     }
     set_busy(false);

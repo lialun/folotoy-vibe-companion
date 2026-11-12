@@ -243,7 +243,7 @@ int main(int argc,char **argv) {
     lv_display_set_buffers(d,stripe,NULL,sizeof(stripe),LV_DISPLAY_RENDER_MODE_PARTIAL); lv_display_set_flush_cb(d,flush);
     vibe_model_init(&model,now); model.voice_ready=true; model.enter_ready=true;
     prefs=(vibe_prefs_t){.weather_enabled=true,.focus_minutes=25,.break_minutes=5,.volume=60}; strcpy(prefs.city,"北京");
-    status=(vibe_status_t){.wifi=true,.peer=true,.audio_ready=true,.hotkey_ready=true,.battery=72,.rssi=-50,.tz_minutes=480,.weather_at_ms=now}; strcpy(status.token,"preview");
+    status=(vibe_status_t){.wifi=true,.wifi_enabled=true,.ble_enabled=true,.paired_count=1,.link=V_LINK_WIFI,.peer=true,.audio_ready=true,.hotkey_ready=true,.battery=72,.rssi=-50,.tz_minutes=480,.weather_at_ms=now}; strcpy(status.token,"preview");strcpy(status.computer,"工作电脑");
     status.appearance=vibe_appearance_default();status.appearance.mode=V_THEME_DARK;vibe_signal_update(&status.signal,status.rssi);
     weather_fixture();
     if (argc==3) {
@@ -330,8 +330,10 @@ int main(int argc,char **argv) {
     model.page=V_PROVISION;strcpy(status.ap_name,"Vibe-Setup-A1B2C3");capture(argv[1],"wifi-setup");
     model.page=V_HOME;model.timer=V_TIMER_READY;model.completion_until_ms=0;status.peer=false;capture(argv[1],"disconnected");
     status.wifi=false;capture(argv[1],"network-reconnecting");status.wifi=true;
-    status.token[0]=0;strcpy(status.pair_code,"123456");capture(argv[1],"pairing");
-    status.peer=true;strcpy(status.token,"preview");strcpy(prefs.city,"呼和浩特");
+    status.token[0]=0;status.paired_count=0;strcpy(status.pair_code,"123456");capture(argv[1],"pairing");
+    status.peer=true;status.paired_count=1;status.link=V_LINK_BLE;capture(argv[1],"bluetooth-connected");status.link=V_LINK_WIFI;
+    model.page=V_PAIR;capture(argv[1],"pair-computer");model.page=V_HOME;
+    strcpy(status.token,"preview");strcpy(prefs.city,"呼和浩特");
     status.forecast.temperature=-40;status.forecast.feels=-45;status.forecast.code=99;
     status.forecast.days[0]=(vibe_forecast_t){.low=-40,.high=-30,.code=99,.rain=100,.wind_valid=true,.wind_ms=56.1f,.uv_valid=true,.uv_tenths=500};
     status.forecast.days[1]=status.forecast.days[2]=status.forecast.days[0];

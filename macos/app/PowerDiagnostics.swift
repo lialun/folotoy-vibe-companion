@@ -122,7 +122,7 @@ struct PowerSnapshot {
         func integer(_ value:Int?)->String { value.map(String.init) ?? "null" }
         func boolean(_ value:Bool?)->String { value.map{$0 ? "true" : "false"} ?? "null" }
         let date=ISO8601DateFormatter().string(from:received)
-        return ["Vibe 待机诊断 \(date)",
+        return ["Vibe 设备状态 \(date)",
             "elapsed_ms=\(number(elapsedMS)) blank_ms=\(number(blankMS)) blank_sleep_ms=\(number(blankSleepMS)) sleep_ms=\(number(sleepMS))",
             "sleeps=\(integer(sleeps)) rejects=\(integer(rejects)) longest_ms=\(number(longestMS))",
             "battery_pct=\(integer(battery)) battery_mv=\(integer(millivolts)) usb_host=\(boolean(usb)) key_wake=\(boolean(keyWake))",

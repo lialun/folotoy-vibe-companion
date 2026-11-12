@@ -17,9 +17,11 @@ Requires **macOS 13+**, on Apple Silicon or Intel. Download the DMG or ZIP from
    xattr -dr com.apple.quarantine
    ```
 
-3. **Connect:** install the matching device firmware, keep Mac and device on a
-   reachable LAN, and allow local network access when prompted. Enter the
-   six-digit code shown on the device to pair.
+3. **Connect:** install matching device firmware. Use a reachable LAN and allow
+   local network access, or allow Bluetooth for BLE. Open **Device settings →
+   Pair computer** on the device and enter its six-digit code in the app.
+   BLE and multiple computers are features of the current development branch;
+   published 0.8.3 firmware uses Wi-Fi only. See [connection rules](connections.md).
 4. **Set up voice (optional):** install [BlackHole 2ch](https://existential.audio/blackhole/)
    and [WeType](https://z.weixin.qq.com/). In the input method, choose BlackHole 2ch
    as microphone and set hold-to-talk to **left Control + left Option + V**;

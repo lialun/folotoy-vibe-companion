@@ -13,6 +13,7 @@
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+<key>NSBluetoothAlwaysUsageDescription</key><string>通过蓝牙连接 FoloToy，接收语音、收听电台、同步设置及发送 Agent 提醒。</string>
 <key>NSLocalNetworkUsageDescription</key><string>通过同一 Wi-Fi 发现 FoloToy，接收设备麦克风的语音并修改设备设置。</string>
-<key>NSHumanReadableCopyright</key><string>MIT · FoloToy and Vibe Companion contributors</string>
+<key>NSHumanReadableCopyright</key><string>MIT · FoloToy and Vibe Companion contributors · FFmpeg 8.0.3 (LGPL-2.1-or-later)</string>
 </dict></plist>

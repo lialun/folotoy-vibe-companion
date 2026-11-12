@@ -50,15 +50,21 @@ is required.
 ### Pair the computer
 
 Install the app, BlackHole 2ch and a compatible input method using the
-[Mac guide](install.md). Keep the computer and device on a reachable LAN; guest
-network/client isolation can prevent discovery. The app chooses an available
-client port automatically.
+[Mac guide](install.md). The current development branch adds BLE and multiple
+remembered computers; the published 0.8.3 firmware remains Wi-Fi only.
 
-Enter the device's six-digit pairing code in the app. In the input method,
+Use a reachable LAN or allow Bluetooth in the desktop app. BLE-only use does not
+require Wi-Fi setup. If the initial Wi-Fi portal is open, hold SETTINGS to close
+it. Open **Functions → Device settings → Pair computer** to view the code.
+Guest network/client isolation can prevent Wi-Fi discovery; the app chooses an
+available client port automatically. Enter the six-digit code in the app. In the input method,
 select **BlackHole 2ch** and a hold-to-talk shortcut matching the companion.
 Grant keyboard-control permission to the **app itself**. Permission previously
-given to Terminal is separate. The current version pairs one device with one
-computer. Pairing uses a private local file, not Keychain.
+given to Terminal is separate. The device remembers up to eight computers, with one active owner. Pairing over
+one link also authorizes the other link for that computer. To take over from a
+second paired computer, click **Switch to this computer**. Healthy routes stay
+selected; a failed route can fall back to the same computer's other link.
+Pairing uses a private local file, not Keychain. See [connection rules](connections.md).
 
 Focus an input field, hold UP, speak, and release. Tap DOWN to insert Enter.
 The computer must remain awake, including when its lid is closed.
@@ -122,8 +128,11 @@ Open **Functions → Radio**. In the desktop app, use **Recommended**, **Search*
 or **Custom** to build My stations, then drag to order and save. Up to 20
 stations are supported. Search can be empty; the Chinese checkbox is optional.
 Custom addresses must be supported public audio/playlist URLs, not web pages.
-The app probes for recognizable media before adding a custom station; a Mac
-probe passing does not guarantee playback on the ESP32.
+The app probes for recognizable media before adding a custom station; a local probe passing does not guarantee future availability.
+
+Keep the active computer awake, online and running the companion. It fetches
+and decodes stations, then relays audio over Wi-Fi or BLE. Device Wi-Fi may be
+off for BLE listening. The device cannot play Internet radio independently.
 
 SETTINGS advances to the next station. Hold UP for voice: playback resources
 are released, voice gets priority, and the previous listening intent reconnects
@@ -162,14 +171,14 @@ The Pomodoro uses monotonic elapsed time, not wall-clock adjustments.
 Unpairing the computer changes pairing only. It preserves Wi-Fi and other
 settings; pair again on the new computer. Software shutdown is not provided.
 
-## Agent reminders and standby diagnostics
+## Agent reminders and device status
 
 Install the integrations you need through **Agent notifications**. See
 [the coverage and verification guide](agents.md). A reminder wakes the screen,
 sounds, and overlays the current page for five seconds. A physical button closes
 it and continues the same gesture. No session ID is displayed as a name.
 
-For standby checks, open **Connection and voice → Standby diagnostics**. Use
+For standby checks, open **Connection and voice → Device status**. Use
 Reset timing, unplug USB, let the screen sleep for 5–10 minutes, then Read stats.
 Statistics include screen-off/light-sleep time and power-lock information; they
 are not current measurement. USB connection itself can block automatic light
@@ -178,6 +187,27 @@ shows dynamic-heap usage, free space, largest free block, and historical minimum
 free space. **Copy report** exports reported counters for troubleshooting; there
 is no continuous sampling. Battery percentage is the fuel gauge's estimate,
 not a calibrated current or capacity reading.
+
+### Event history
+
+Event history appears below the runtime statistics in the same **Device status**
+panel. **Copy report** combines the available runtime snapshot and events in one
+compact JSON report. Saved events remain accessible while disconnected. The
+computer keeps the latest 500 records across app
+restarts. Radio reports distinguish source/HTTP/TLS failures, missing receiver
+acknowledgments, device buffer shortages, recording and speaker errors. A stream
+number links related computer and device records; build and ELF identities help
+match the firmware. Receipt time is the computer's time, not an inferred device
+wall-clock timestamp.
+
+The device keeps eight small records in RAM and uploads them over the selected
+paired link, with catch-up on reconnect. Older offline records can be overwritten;
+unreported records are lost on reset or power loss. Boot records include the reset
+reason but are not a crash backtrace. The app marks gaps instead of inventing
+missing history. Nothing is uploaded to a server. Reports exclude passwords,
+pairing tokens, network addresses, station URLs, raw process errors, voice and
+conversation content. Custom stations are labeled generically. Logs are bounded
+diagnostic evidence, not a complete recording of every device action.
 
 ## Troubleshooting
 

@@ -23,12 +23,18 @@ choosing a data-preserving segmented upgrade.
 
 ## Local Mac app
 
-Requires a Mac with Swift and the macOS SDK, normally from Xcode Command Line
-Tools or full Xcode. The developer needs a compiler; end users do not.
+Building the client requires macOS 13+, Swift, the macOS SDK and Python 3;
+ESP-IDF is not required. Install Swift and the SDK through Xcode Command Line
+Tools (`xcode-select --install`) or full Xcode.
 
 ```bash
+git clone https://github.com/lialun/folotoy-vibe-companion.git
+cd folotoy-vibe-companion
 bash macos/build.sh
 ```
+
+The first build needs network access to download and verify the pinned radio
+decoder source; subsequent builds use the local cache.
 
 The script builds both `arm64` and `x86_64`, combines them into one application,
 signs it, runs native protocol tests and packages a DMG and ZIP in `build/macos/`.
@@ -44,9 +50,8 @@ The ZIP is an alternative containing the same app. Both include app resources
 with license/third-party notices. `SHA256SUMS.txt` uses portable filenames.
 No Apple certificate or account secrets are used by default.
 
-Optional future Developer ID signing and notarization remain supported by the
-build script, but are not part of the selected free release route. That option
-requires your own [Developer ID](https://developer.apple.com/developer-id/),
+Developer ID signing and notarization are optional and disabled by default. They
+require your own [Developer ID](https://developer.apple.com/developer-id/),
 Keychain identity and `notarytool` profile:
 
 ```bash

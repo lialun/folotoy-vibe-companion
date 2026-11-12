@@ -124,3 +124,5 @@ App，不申请权限、连接设备或安装 Hook。`tools/render_readme.swift`
 [LVGL](https://github.com/lvgl/lvgl/tree/v9.5.0) 和[乐鑫组件库](https://components.espressif.com/)。
 变更依赖时，同步核对许可、更新保留副本和打包标签。音频组件许可与本项目自有源码
 的 MIT 许可不同。
+
+内置电台解码器许可证为 [LGPL-2.1](licenses/ffmpeg-lgpl-2.1.txt)。FFmpeg 8.0.3 由 `macos/build-radio-helper.sh` 从校验值固定的上游源码构建，对应未修改源码压缩包与构建脚本随应用分发；生成的二进制和下载源码不提交 Git。

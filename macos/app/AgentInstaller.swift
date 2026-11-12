@@ -3,8 +3,10 @@ import Darwin
 
 struct AgentIntegration:Identifiable {
     let agent:AgentID,executable:URL?,application:URL?,installed:Bool
+    var issue=""
     var id:String { agent.rawValue }
     var detected:Bool { executable != nil || application != nil }
+    var status:String { !issue.isEmpty ? "异常" : installed ? "已安装" : "未安装" }
 }
 struct AgentInstallError:LocalizedError {
     let text:String
@@ -30,7 +32,7 @@ enum AgentInstaller {
             let base=home("XDG_CONFIG_HOME",".config").appendingPathComponent("opencode")
             let commented=base.appendingPathComponent("opencode.jsonc")
             return FileManager.default.fileExists(atPath:commented.path) ? commented : base.appendingPathComponent("opencode.json")
-        case .dsh:return PairingStore.directory.appendingPathComponent("agents/dsh/package.json")
+        case .dsh:return home("DSH_HOME",".dsh").appendingPathComponent("profiles/desktop/package.json")
         }
     }
     static func executable(_ names:[String])->URL? {
@@ -46,10 +48,71 @@ enum AgentInstaller {
             let roots=[URL(fileURLWithPath:"/Applications"),FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
             let app=roots.flatMap{root in apps.map{root.appendingPathComponent($0+".app")}}.first{FileManager.default.fileExists(atPath:$0.path)}
             let cli=executable([id == .claude ? "claude" : id.rawValue])
-            let content=(try? String(contentsOf:config(id),encoding:.utf8)) ?? ""
-            let installed=id == .opencode ? content.contains("vibe-companion-opencode") : id == .dsh ? false : content.contains(marker+" "+id.rawValue)
-            return AgentIntegration(agent:id,executable:cli,application:app,installed:installed)
+            let status=id == .dsh ? dshInstallation(profiles:home("DSH_HOME",".dsh").appendingPathComponent("profiles")) : installation(id,file:config(id))
+            return AgentIntegration(agent:id,executable:cli,application:app,installed:status.installed,issue:status.issue)
         }
+    }
+    // Installation is read from native configuration, never inferred from a
+    // previous event or from our prepared-but-not-installed plugin directory.
+    static func installation(_ agent:AgentID,file:URL)->(installed:Bool,issue:String) {
+        guard FileManager.default.fileExists(atPath:file.path) else { return (false,"") }
+        do {
+            let root=try dictionary(JSONSerialization.jsonObject(with:Data(contentsOf:file),options:.json5Allowed),"配置")
+            if agent == .opencode {
+                guard root["plugins"]==nil || root["plugins"] is [Any] else { return (false,"plugins 配置格式异常") }
+                let installed=(root["plugins"] as? [Any] ?? []).contains { item in
+                    let path=(item as? String) ?? (item as? [String:Any])?["package"] as? String ?? ""
+                    return URL(fileURLWithPath:path).lastPathComponent=="vibe-companion-opencode"
+                }
+                return (installed,"")
+            }
+            let hooks=try dictionary(root["hooks"],"hooks")
+            let events=agent == .zcode ? try dictionary(hooks["events"],"hooks.events") : hooks
+            let installed=events.values.contains { value in
+                (value as? [[String:Any]] ?? []).contains { group in
+                    (group["hooks"] as? [[String:Any]] ?? []).contains {
+                        ($0["command"] as? String ?? "").contains(marker+" "+agent.rawValue+" ")
+                    }
+                }
+            }
+            let disabled=root["disableAllHooks"] as? Bool==true || hooks["enabled"] as? Bool==false ||
+                (agent == .gemini && (root["hooksConfig"] as? [String:Any])?["enabled"] as? Bool==false)
+            return (installed,installed && disabled ? "Agent 中的 Hook 已禁用" : "")
+        } catch { return (false,"无法读取或解析 Agent 配置") }
+    }
+    static func dshInstallation(profiles:URL)->(installed:Bool,issue:String) {
+        let fm=FileManager.default,name="vibe-companion-dsh"
+        guard fm.fileExists(atPath:profiles.path) else { return (false,"") }
+        do {
+            let folders=try fm.contentsOfDirectory(at:profiles,includingPropertiesForKeys:[.isDirectoryKey],options:.skipsHiddenFiles)
+            var installed=false,issue=""
+            for folder in folders where folder.lastPathComponent != "node_modules" {
+                guard try folder.resourceValues(forKeys:[.isDirectoryKey]).isDirectory==true else { continue }
+                let file=folder.appendingPathComponent("package.json")
+                guard fm.fileExists(atPath:file.path) else { continue }
+                do {
+                    let root=try dictionary(JSONSerialization.jsonObject(with:Data(contentsOf:file)),"profile")
+                    let profile=(root["dsh"] as? [String:Any])?["profile"] as? [String:Any]
+                    let declared=(root["dependencies"] as? [String:Any])?[name] != nil
+                    let bundled=(profile?["bundles"] as? [String] ?? []).contains(name)
+                    guard declared || bundled else { continue }
+                    guard bundled else { issue="DSH 插件尚未加入配置，请在 DSH 中重新安装";continue }
+                    let package=folder.appendingPathComponent("node_modules/"+name)
+                    let manifest=try dictionary(JSONSerialization.jsonObject(with:Data(contentsOf:package.appendingPathComponent("package.json"))),"插件")
+                    let entry=(manifest["main"] as? String) ?? "index.js"
+                    let bundle=(manifest["dsh"] as? [String:Any])?["bundle"] as? [String:Any]
+                    guard manifest["name"] as? String==name,let patch=bundle?["patch"] as? String,
+                          fm.fileExists(atPath:package.appendingPathComponent(entry).path),
+                          fm.fileExists(atPath:package.appendingPathComponent(patch).path) else {
+                        issue="DSH 插件文件不完整，请在 DSH 中重新安装";continue
+                    }
+                    installed=true
+                } catch { issue="无法读取 DSH 插件配置或文件，请在 DSH 中检查插件" }
+            }
+            // Desktop and terminal profiles are independent. One valid installed
+            // profile is enough; never turn an unrelated profile into an error.
+            return (installed,installed ? "" : issue)
+        } catch { return (false,"无法读取 DSH 配置目录") }
     }
     static func privateWrite(_ data:Data,to file:URL,backup:Bool=true)throws {
         let file=file.resolvingSymlinksInPath()
@@ -187,8 +250,8 @@ enum AgentInstaller {
         if let toml=toml,let content=tomlData { try privateWrite(content,to:toml) }
         try privateWrite(encoded,to:file)
         if !install { return "已移除 Vibe 伴侣集成，其他配置已保留" }
-        if row.agent == .codex { return "已安装，等待验证。请在 Codex 的 /hooks 或桌面端「设置 → Hooks」中信任新 Hook，再开始一轮对话。" }
-        return "已安装，等待验证。请重新打开对应 Agent 会话；收到真实事件后会显示记录。"
+        if row.agent == .codex { return "已安装。请在 Codex 的 /hooks 或桌面端「设置 → Hooks」中信任新 Hook。" }
+        return "已安装。请重新打开对应 Agent 会话。"
     }
     static func stage(_ source:String,name:String)throws->URL {
         guard let resources=Bundle.main.resourceURL else { throw AgentInstallError(text:"插件资源缺失") }

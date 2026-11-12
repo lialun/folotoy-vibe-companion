@@ -2350,3 +2350,76 @@ matching ELF SHA-256 `e4c4601a8cfb757f304158a6316d4764e6aa7d1c27644e5921c75f2abd
 Archive: `build/firmware/cadb4cbfc648c76afa05b8846f95a51ea2b309406fb6cf9b03dbd773e423acac/`.
 Updated local review package: `.work/release-prep/review-package-power-report-data-only/`.
 No commit, push, tag or publication was made.
+
+## Wi-Fi, BLE and computer ownership
+
+The connection architecture is defined in [Connections](connections.md).
+The device remembers eight computer identities and permits one active owner.
+Wi-Fi and BLE share each computer's credential; at most two BLE links are kept
+for the owner and a temporary takeover connection. Healthy routes remain selected,
+and failover considers the same computer before another paired computer.
+
+Protocol 3 controls are bound to both the device boot nonce and ownership lease.
+The controller rejects stale claims, old configuration writes and previous-boot
+messages. The desktop validates complete revision headers, rejects downgrades,
+and confirms takeover from an authoritative ownership announcement. Wireless
+switches can be confirmed on the surviving route if the original acknowledgement
+is lost. Other old-route operations are discarded. Physical-code pairing can
+recover one computer's credential without changing other records.
+
+The BLE adapter preserves restored subscriptions, rejects reused connection
+handles, bounds fragment assembly and HCI retries, and joins the host task before
+shutdown. With ESP-IDF 5.5.3, runtime-block pools are disabled while dynamic
+contexts remain enabled to permit safe teardown and reclamation. BLE startup
+follows resident Wi-Fi/UI allocation. The network worker uses eventfd for local
+wakeups, including BLE-only operation; no polling task is added.
+
+## Computer-relayed radio and diagnostic history
+
+Radio decoding runs in a separate, on-demand FFmpeg subprocess on the active
+computer. The packaged universal decoder includes corresponding LGPL sources
+and its build recipe. The device receives independent 50 ms, 24 kHz mono IMA
+ADPCM blocks through a credit-controlled, segmented 15,704 / 23,556-byte FIFO.
+The resident voice PCM reservation and 16 KiB control/network margin are retained.
+Voice preemption stops the relay and releases disposable radio allocations.
+
+The device diagnostic ring occupies 200 bytes. Against the relay-only reference
+build, initialized DRAM and BSS increased by 304 bytes in total. No diagnostic
+sampling task, periodic timer or Flash logging is added. The desktop retains
+at most 500 typed records / 512 KiB, catches up offline records, deduplicates
+retries and exports only approved fields. Raw URLs, credentials, network
+addresses, decoder stderr and conversation text are excluded.
+
+Connection and voice readiness are independent UI states. Wi-Fi and BLE each
+show their status, while permission/driver errors remain in the voice section.
+Device statistics and diagnostic history share one destination. Agent installation
+is read from native configuration; DSH detection checks registered bundles and
+installed files rather than relying on prior events. Opening a non-owner client
+window does not unpark its BLE connection.
+
+## Validation — 2026-11-12
+
+- Build: PASS — complete repository gate, merged-image verification, universal
+  macOS packaging, signatures and DMG checks. The desktop also built from a clean
+  source archive with a newly downloaded and compiled decoder.
+- Host tests: PASS — ASan/UBSan ownership, controller, BLE lifecycle and relay
+  tests; 100,000 deterministic ownership operations; actual loopback socket and
+  desktop dispatcher tests; C-to-Swift audio/diagnostic fixtures; native arm64 and
+  Rosetta x86_64 protocol/Agent suites. Cases include NVS rollback, credential
+  repair, stale controls, restart, ownership announcement before reply and ACK
+  loss during a wireless switch.
+- Device tests: PASS within one-device/one-Mac coverage — compatible application
+  update, boot-image verification, retained settings, repeated Wi-Fi/BLE switching,
+  live statistics over either standalone route, BLE shutdown/restart and correct
+  switch confirmation. A BLE drop during Wi-Fi startup recovered automatically;
+  seamless handoff is not guaranteed. The final ownership fixes leave DRAM
+  data/BSS and IRAM sizes unchanged.
+- Unverified: two physical computers switching concurrently, multiple real
+  networks, prolonged coexistence, physical speech/Enter and radio playback during
+  handoff, Intel hardware, clean-system permissions and battery current. Model and
+  dispatcher tests do not establish these end-to-end results.
+
+Reference device test image SHA-256:
+`bb8a49d1f44aef3f9e54639087eb507db203748126af32d242de05037a6a236d`.
+Matching ELF SHA-256:
+`8c0e14c9432d88a40f26e0ec45e6a9d68323bf979b9de5d8687d2f18c5649586`.

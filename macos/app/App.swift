@@ -37,11 +37,14 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(willSleep),name:NSWorkspace.willSleepNotification,object:nil)
         NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(didWake),name:NSWorkspace.didWakeNotification,object:nil)
     }
-    func applicationDidBecomeActive(_ notification:Notification) { refreshPermission() }
+    func applicationDidBecomeActive(_ notification:Notification) {
+        refreshPermission()
+        if let model=model,!model.preview { model.agents.refresh() }
+    }
     func windowDidBecomeKey(_ notification:Notification) { refreshPermission() }
     private func refreshPermission() {
         guard let m=model,!m.preview,!permissionProbeRunning else { return }
-        if Shortcut.permitted { permissionReloaded=false;awaitingPermissionReturn=false;m.engine.retry();return }
+        if Shortcut.permitted { permissionReloaded=false;awaitingPermissionReturn=false;m.engine.refreshReadiness();return }
         guard !permissionReloaded else { return } // Never enter an automatic restart loop.
         permissionProbeRunning=true;m.permissionChecking=true
         DispatchQueue.global(qos:.utility).async { [weak self] in
@@ -49,7 +52,7 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
             DispatchQueue.main.async {
                 guard let self=self,let m=self.model else { return }
                 self.permissionProbeRunning=false;m.permissionChecking=false
-                guard PermissionRecoveryPolicy.shouldReload(current:Shortcut.permitted,fresh:granted,returnedFromSettings:self.awaitingPermissionReturn,alreadyReloaded:self.permissionReloaded) else { m.engine.retry();return }
+                guard PermissionRecoveryPolicy.shouldReload(current:Shortcut.permitted,fresh:granted,returnedFromSettings:self.awaitingPermissionReturn,alreadyReloaded:self.permissionReloaded) else { m.engine.refreshReadiness();return }
                 // Defer the reload until in-flight saves/probes/capture finish.
                 if m.saving || m.radioLoading || m.radioChecking || m.state.recording {
                     DispatchQueue.main.asyncAfter(deadline:.now()+1) { [weak self] in self?.refreshPermission() };return

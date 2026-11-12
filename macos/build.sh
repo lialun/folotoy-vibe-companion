@@ -29,6 +29,17 @@ iconutil -c icns "${out}/objects/AppIcon.iconset" -o "${app}/Contents/Resources/
 rm -rf "${app}/Contents/Resources/AgentAdapters"
 cp -R "${root}/macos/agents" "${app}/Contents/Resources/AgentAdapters"
 cp "${root}/LICENSE" "${app}/Contents/Resources/LICENSE.txt"
+bash "${root}/macos/build-radio-helper.sh"
+radio_cache="${VIBE_RADIO_BUILD:-${root}/.work/radio-helper}"
+cp "${radio_cache}/RadioDecoder" "${app}/Contents/Resources/RadioDecoder"
+mkdir -p "${app}/Contents/Resources/RadioDecoderSource"
+cp "${radio_cache}/COPYING.LGPLv2.1" "${radio_cache}/build-radio-helper.sh" \
+   "${radio_cache}/ffmpeg-8.0.3.tar.xz" "${app}/Contents/Resources/RadioDecoderSource/"
+if [[ -n "${VIBE_SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --timestamp --sign "${VIBE_SIGN_IDENTITY}" "${app}/Contents/Resources/RadioDecoder"
+else
+    codesign --force --sign - "${app}/Contents/Resources/RadioDecoder"
+fi
 cp "${root}/docs/vibe/install.md" "${app}/Contents/Resources/Installation.md"
 cp "${root}/docs/vibe/install.zh_CN.md" "${app}/Contents/Resources/Installation.zh_CN.md"
 python3 "${root}/tools/package_notices.py" "${app}/Contents/Resources/THIRD_PARTY_NOTICES.txt"
@@ -44,7 +55,17 @@ cc -std=c11 -Wall -Wextra -Werror -I"${root}/main/vibe" \
     "${root}/main/vibe/protocol.c" -lm -o "${out}/objects/wire-vector"
 "${out}/objects/wire-vector" "${out}/objects/voice-vector.bin"
 "${app}/Contents/MacOS/VibeCompanion" --self-test --agent-tests
-"${app}/Contents/MacOS/VibeCompanion" --self-test --vectors "${out}/objects/voice-vector.bin"
+cc -std=c11 -Wall -Wextra -Werror -I"${root}/main/vibe" \
+    "${root}/tests/vibe/test_radio_relay.c" "${root}/main/vibe/adpcm.c" \
+    -o "${out}/objects/radio-vector"
+"${out}/objects/radio-vector" "${out}/objects/radio-vector.bin"
+cc -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations \
+    -I"${root}/tests/vibe/diagnostic_stubs" -I"${root}/tests/vibe/relay_stubs" -I"${root}/tests/vibe/connection_stubs" \
+    -I"${root}/tests/vibe/stubs" -I"${root}/tests/audio_stubs" -I"${root}/tests/vibe/vendor/cjson" -I"${root}/main/vibe" \
+    "${root}/tests/vibe/test_diagnostics.c" "${root}/tests/vibe/vendor/cjson/cJSON.c" -lm -o "${out}/objects/diagnostic-vector"
+"${out}/objects/diagnostic-vector" "${out}/objects/diagnostic-vector.json"
+"${app}/Contents/MacOS/VibeCompanion" --self-test --radio-vectors "${out}/objects/radio-vector.bin" --vectors "${out}/objects/voice-vector.bin"
+"${app}/Contents/MacOS/VibeCompanion" --self-test --diagnostic-vector "${out}/objects/diagnostic-vector.json"
 ditto -c -k --sequesterRsrc --keepParent "${app}" "${out}/VibeCompanion-${version}-macOS.zip"
 if [[ "${VIBE_NOTARIZE:-0}" == 1 ]]; then
     : "${VIBE_SIGN_IDENTITY:?Developer ID signing identity is required}"

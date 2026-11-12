@@ -17,6 +17,7 @@ vibe_prefs_t v_prefs;
 vibe_status_t v_status;
 SemaphoreHandle_t v_mutex=(void *)1;
 QueueHandle_t v_queue=(void *)2;
+void vibe_diagnostics_record(unsigned code,int32_t detail) { assert(code>=201 && code<=203);(void)detail; }
 static bool initialized,sleeping,locked;
 static bool fail_wake,fail_read,fail_radio_memory,reconnect_mode;
 static unsigned radio_waits[3],radio_wait_count;
@@ -95,11 +96,14 @@ void vibe_send_json(const char *json) {
 int vibe_send_audio(const void *bytes,size_t length) {
     assert(bytes && length==ADPCM_BLOCK_BYTES+2); ++packets; return 0;
 }
+bool vibe_transport_voice_begin(void) { starts++;return true; }
+void vibe_transport_voice_end(void) { ends++; }
 void vibe_radio_url(char *url,unsigned capacity) { snprintf(url,capacity,"http://test/radio"); }
 void vibe_radio_status(unsigned state,const char *detail) { (void)detail; v_status.radio_state=state; }
 unsigned ui_sfx_samples(ui_sfx_kind_t kind) { assert(kind==UI_SFX_ALARM); return 320; }
 int16_t ui_sfx_sample(ui_sfx_kind_t kind,unsigned index) { assert(kind==UI_SFX_ALARM); return index%2 ? 300 : -300; }
-vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void)) {
+int vibe_relay_play(const char *url,bool (*cancel)(void),int16_t *pcm) {
+    assert(pcm==capture_pcm);
     (void)url;(void)cancel;assert(!sleeping && pcm_live==1 && background_paused);++radios;
     if (fail_radio_memory) { v_status.radio_state=V_RADIO_ERROR;strcpy(v_status.radio_error,"decoder memory");return V_RADIO_SESSION_NO_MEMORY; }
     if (reconnect_mode) { now+=1000;return V_RADIO_SESSION_PLAYED; }
@@ -118,7 +122,7 @@ int main(void) {
     fail_pcm_allocate=true;
     int16_t pcm[ADPCM_BLOCK_SAMPLES];
     v_prefs=(vibe_prefs_t){.mic_gain=30,.volume=80};
-    v_model.voice_ready=true;
+    v_model.voice_ready=true;v_status.wifi=true;v_status.peer=true;v_status.link=V_LINK_WIFI;
     assert(bsp_audio_init()==ESP_OK && bsp_audio_sleep()==ESP_OK);
     v_model.recording=true; capture(pcm);
     assert(starts==1 && ends==1 && packets==1 && !v_status.audio_fault);

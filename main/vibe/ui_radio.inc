@@ -89,7 +89,7 @@ static void radio_update(const vibe_model_t *m,const vibe_status_t *s) {
     radio_motion.index=m->radio_index;
     const char *state=m->recording?"语音输入中":!m->radio_count?"在客户端添加电台":
         s->radio_state==V_RADIO_ERROR?(s->radio_error[0]?s->radio_error:"连接失败"):
-        !s->wifi?"等待 Wi-Fi":!m->radio_requested?"已停止":
+        !s->peer?"等待电脑连接":!m->radio_requested?"已停止":
         (s->radio_state==V_RADIO_CONNECTING || s->radio_state==V_RADIO_STOPPED)?"正在连接":
         s->radio_state==V_RADIO_BUFFERING?"正在缓冲":"正在播放";
     home_line(2,12,216,198,&small,s->radio_state==V_RADIO_ERROR?FOCUS_COLOR:AMBER,state);
