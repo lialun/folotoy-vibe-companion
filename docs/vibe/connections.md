@@ -98,6 +98,22 @@ one-way Wi-Fi loss cannot leave the device sending into a failed return path.
 The device honors a BLE preference only while that link is fresh, and otherwise
 uses fresh Wi-Fi. Older peers without the field retain automatic selection.
 
+## Agent notices and voice wake
+
+For a known Agent session, the desktop derives a stable 36-character UUID from
+the Agent, session and notice kind. Different turns of the same kind therefore
+share the device's notice ID and do not ring again. Missing or unknown sessions
+retain a random ID. When a physical key dismisses a visible notice, the device
+sends `agent.dismissed` with the decimal FNV-1a 64-bit hash of that UUID over
+both links. The desktop uses it to mute later notices of that Agent, session
+and kind; other kinds remain available. Older peers ignore unknown events.
+
+On a dark-screen wake with voice not ready, the device sends a rate-limited
+`pc.ping`. An authenticated desktop with a credential immediately sends a
+unicast beacon to refresh readiness. If capture starts while voice remains
+unavailable, the device reports `voice.ignored` with reason `not_ready`.
+The desktop records that diagnostic without changing the connection state.
+
 
 ## Acceptance
 

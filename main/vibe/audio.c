@@ -61,7 +61,11 @@ static void alarm_play(int16_t *pcm) {
 static void capture(int16_t *pcm) {
     vibe_prefs_t p; vibe_model_t m; vibe_status_t s;
     vibe_snapshot(&m,&p,&s);
-    if (!m.recording || !m.voice_ready) return;
+    if (!m.recording) return;
+    if (!m.voice_ready) {
+        vibe_send_json("{\"event\":\"voice.ignored\",\"reason\":\"not_ready\"}");
+        return;
+    }
     esp_wifi_set_ps(WIFI_PS_NONE);
     bool started=false,failed=false;
     if (prepare_audio("capture") && bsp_audio_set_format(16000,16,1)==ESP_OK && bsp_audio_set_input_gain(p.mic_gain)==ESP_OK) {

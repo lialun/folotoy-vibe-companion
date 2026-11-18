@@ -15,7 +15,8 @@ typedef struct {
 bool vibe_agent_push(vibe_agent_alert_t *s,uint64_t id,unsigned agent,unsigned kind,uint64_t now,unsigned ttl);
 bool vibe_agent_tick(vibe_agent_alert_t *s,uint64_t now,bool blocked);
 /* A physical press closes the current notice and its already-queued backlog.
- * Keep deduplication IDs; the same packet must not make the notice reappear. */
+ * Keep deduplication IDs; the same packet must not make the notice reappear.
+ * On success active.id remains available for the agent.dismissed reply. */
 bool vibe_agent_dismiss(vibe_agent_alert_t *s);
 const char *vibe_agent_name(unsigned agent);
 const char *vibe_agent_action(unsigned kind);

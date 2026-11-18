@@ -67,6 +67,7 @@ final class AppModel: ObservableObject {
         engine=Engine(preview:preview)
         agents.deliver={ [weak self] event in self?.engine.notifyAgent(event) }
         engine.onAgentResult={ [weak self] message in self?.agents.message=message }
+        engine.onAgentDismiss={ [weak self] key in self?.agents.mute(noticeKey:key) }
         if !preview {
             do {
                 if FileManager.default.fileExists(atPath:AgentInstaller.helper.path) { try AgentInstaller.prepareHelper() }

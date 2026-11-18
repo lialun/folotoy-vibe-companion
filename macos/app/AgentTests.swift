@@ -52,6 +52,20 @@ enum AgentTests {
         let center=AgentCenter(preview:true);center.enabled=true
         var delivered=0;center.deliver={_ in delivered+=1}
         let immediate=AgentEvent.parse(agent:.codex,event:"Stop",payload:payload)!
+        var nextTurn=payload;nextTurn["turn_id"]="next-turn"
+        let sameNotice=AgentEvent.parse(agent:.codex,event:"Stop",payload:nextTurn)!
+        check(immediate.key != sameNotice.key && immediate.noticeID==sameNotice.noticeID && immediate.noticeID.count==36,
+              "different turns share a valid stable notice UUID")
+        check(immediate.noticeKey==sameNotice.noticeKey,"notice key ignores turn identity")
+        let unknownA=AgentEvent(agent:.codex,kind:.completed,session:"unknown",key:immediate.key,project:"")
+        let unknownB=AgentEvent(agent:.codex,kind:.completed,session:"unknown",key:immediate.key,project:"")
+        let emptyA=AgentEvent(agent:.codex,kind:.completed,session:"",key:immediate.key,project:"")
+        let emptyB=AgentEvent(agent:.codex,kind:.completed,session:"",key:immediate.key,project:"")
+        check(unknownA.noticeID==unknownA.id && unknownA.noticeID != unknownB.noticeID &&
+              emptyA.noticeID==emptyA.id && emptyA.noticeID != emptyB.noticeID,
+              "unknown and empty sessions retain random notice IDs")
+        check(Engine.fnv1a64("12345678-1234-1234-1234-123456789abc")==1017417960236020624,
+              "Swift FNV matches C vibe_agent_hash")
         center.accept(immediate)
         check(delivered==1,"completion delivered synchronously without debounce")
         center.accept(immediate)
@@ -59,6 +73,17 @@ enum AgentTests {
         var stale=immediate;stale.created-=20;center.accept(stale)
         check(delivered==1,"expired events remain ignored")
         let epoch=Date().timeIntervalSince1970
+        let mutedCenter=AgentCenter(preview:true);mutedCenter.enabled=true
+        var mutedDelivered=0;mutedCenter.deliver={_ in mutedDelivered+=1}
+        let firstTurn=AgentEvent(agent:.codex,kind:.completed,session:"mute-session",key:AgentEvent.digest("first-turn"),project:"p",created:epoch)
+        let laterTurn=AgentEvent(agent:.codex,kind:.completed,session:"mute-session",key:AgentEvent.digest("later-turn"),project:"p",created:epoch+4)
+        mutedCenter.accept(firstTurn,now:epoch)
+        mutedCenter.mute(noticeKey:firstTurn.noticeKey)
+        mutedCenter.accept(laterTurn,now:epoch+4)
+        check(mutedDelivered==1 && mutedCenter.recent.count==1,"muted notice does not deliver or appear in recent events")
+        let otherKind=AgentEvent(agent:.codex,kind:.approval,session:"mute-session",key:AgentEvent.digest("approval-turn"),project:"p",created:epoch+4)
+        mutedCenter.accept(otherKind,now:epoch+4)
+        check(mutedDelivered==2 && mutedCenter.recent.count==2,"muting one kind leaves other kinds deliverable")
         func notice(_ agent:AgentID,_ session:String,_ kind:AgentKind,_ request:String)->AgentEvent {
             AgentEvent(agent:agent,kind:kind,session:session,
                        key:AgentEvent.digest(agent.rawValue+session+kind.rawValue+request),project:"",created:epoch)

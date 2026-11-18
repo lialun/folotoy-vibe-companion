@@ -96,6 +96,13 @@ static void send_object(cJSON *o) {
     if (s) { vibe_send_json(s); free(s); }
     cJSON_Delete(o);
 }
+static void dismiss_agent_notice(void) {
+    if (!vibe_agent_dismiss(&v_status.agent_alert)) return;
+    char json[96];
+    snprintf(json,sizeof(json),"{\"event\":\"agent.dismissed\",\"id\":\"%llu\"}",
+             (unsigned long long)v_status.agent_alert.active.id);
+    vibe_send_json_both(json);
+}
 static void prefs_message(const char *event,const char *id, const char *error) {
     cJSON *o=cJSON_CreateObject();
     cJSON_AddStringToObject(o,"event",event);
@@ -382,7 +389,7 @@ void app_main(void) {
     esp_pm_config_t pm={.max_freq_mhz=160,.min_freq_mhz=40,.light_sleep_enable=true};
     ESP_LOGI(TAG,"Power management: %s",esp_err_to_name(esp_pm_configure(&pm)));
     ESP_LOGI(TAG,"Power diagnostics: %s",esp_err_to_name(vibe_power_init()));
-    uint64_t painted=0,battery_at=vibe_now(),profile_at=15000; int last_bl=-1;
+    uint64_t painted=0,battery_at=vibe_now(),profile_at=15000,readiness_ping_at=0; int last_bl=-1;
     for (;;) {
         vibe_msg_t msg;
         bool have=xQueueReceive(v_queue,&msg,pdMS_TO_TICKS(vibe_model_wait_ms(&v_model,vibe_now())))==pdTRUE;
@@ -440,7 +447,7 @@ void app_main(void) {
             const int k=msg.key;
             /* Dismiss first, then deliver this exact gesture to the application.
              * Never consume a press or synthesize a second click/release. */
-            if (msg.event==BSP_BTN_PRESS && key_screen_visible) vibe_agent_dismiss(&v_status.agent_alert);
+            if (msg.event==BSP_BTN_PRESS && key_screen_visible) dismiss_agent_notice();
             const vibe_page_t before_page=v_model.page;
             const vibe_timer_t before_timer=v_model.timer;
             unsigned a=0;
@@ -453,7 +460,7 @@ void app_main(void) {
                 held[k]=false; a=vibe_model_key(&v_model,k,V_RELEASE,now);
                 if (!long_press[k]) a|=vibe_model_key(&v_model,k,V_CLICK,now);
             }
-            if (a&(V_START_AUDIO|V_ENTER)) vibe_agent_dismiss(&v_status.agent_alert);
+            if (a&(V_START_AUDIO|V_ENTER)) dismiss_agent_notice();
             execute(a);
             /* Bounded per-gesture diagnostics: no audio, network or credentials. */
             ESP_LOGI(TAG,"key=%d event=%d page=%d->%d timer=%d->%d left=%llu",k,msg.event,
@@ -465,6 +472,7 @@ void app_main(void) {
         execute(vibe_model_tick(&v_model,now));
         if (v_status.agent_alert.visible) { v_model.screen_on=true;v_model.last_activity_ms=now; }
         int bl=v_model.screen_on ? v_model.brightness : 0;
+        bool voice_ready=v_model.voice_ready;
         xSemaphoreGive(v_mutex);
         // Refresh for the first visible frame after standby, then once a minute
         // while visible. No fuel-gauge reads or extra timer while blanked.
@@ -473,6 +481,7 @@ void app_main(void) {
             xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.battery=soc; xSemaphoreGive(v_mutex); battery_at=now;
         }
         if (bl!=last_bl || (bl && !atomic_load_explicit(&screen_visible,memory_order_acquire))) {
+            bool screen_just_woke=bl && last_bl==0;
             if (!bl) { atomic_store_explicit(&screen_visible,false,memory_order_release);bsp_display_backlight(0); }
             if (bl && !screen_awake) {
                 ESP_ERROR_CHECK(esp_pm_lock_acquire(screen_pm_lock));
@@ -489,6 +498,11 @@ void app_main(void) {
                 last_bl=bl;
                 vibe_power_screen(bl!=0);
                 vibe_network_wake();
+                if (screen_just_woke && !voice_ready &&
+                    (!readiness_ping_at || now-readiness_ping_at>=2000)) {
+                    readiness_ping_at=now;
+                    vibe_send_json("{\"event\":\"pc.ping\"}");
+                }
                 ESP_LOGI(TAG,"Screen %s",bl?"awake":"asleep");
             }
         }

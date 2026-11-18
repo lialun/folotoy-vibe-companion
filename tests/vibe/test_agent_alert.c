@@ -32,6 +32,7 @@ int main(void) {
     assert(vibe_agent_tick(&popup,6000,false));
     assert(vibe_agent_push(&popup,103,2,2,6100,10000));
     assert(vibe_agent_dismiss(&popup) && !popup.visible && !popup.count);
+    assert(popup.active.id==102);
     assert(!vibe_agent_tick(&popup,6200,false));
     assert(!vibe_agent_dismiss(&popup));
     /* A retry of a dismissed or already queued notice must not re-open it. */
@@ -45,6 +46,7 @@ int main(void) {
     assert(!vibe_agent_dismiss(&deferred) && deferred.count==1);
     assert(!vibe_agent_tick(&deferred,10000,true) && !deferred.count);
     assert(!strcmp(vibe_agent_name(3),"DSH"));
+    assert(vibe_agent_hash("12345678-1234-1234-1234-123456789abc")==1017417960236020624ULL);
     assert(vibe_agent_hash("a")==vibe_agent_hash("a") && vibe_agent_hash("a")!=vibe_agent_hash("b"));
     printf("Agent fixed queue: PASS (%zu resident bytes)\n",sizeof(s));
 }

@@ -24,6 +24,12 @@ struct AgentEvent:Codable,Identifiable {
     let agent:AgentID,kind:AgentKind,session:String,key:String,project:String
     var created=Date().timeIntervalSince1970
     static func digest(_ text:String)->String { SHA256.hash(data:Data(text.utf8)).map{String(format:"%02x",$0)}.joined() }
+    var noticeKey:String { Self.digest([agent.rawValue,session,kind.rawValue].joined(separator:"|")) }
+    var noticeID:String {
+        guard !session.isEmpty,session != "unknown" else { return id }
+        let hex=String(Self.digest(noticeKey).prefix(32))
+        return "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20))"
+    }
     // Never forward prompts, responses, tool input or transcripts. Keep only identities.
     static func parse(agent:AgentID,event:String="",payload:[String:Any])->AgentEvent? {
         let p=payload
@@ -89,6 +95,8 @@ final class AgentCenter:ObservableObject {
     private let preview:Bool
     private var receiver:AgentReceiver?
     private var seen:[String:TimeInterval]=[:]
+    private var muted=Set<String>()
+    private var mutedOrder:[String]=[]
     private var scans=0
     var deliver:((AgentEvent)->Void)?
     init(preview:Bool=false) {
@@ -109,6 +117,7 @@ final class AgentCenter:ObservableObject {
         guard event.valid,abs(now-event.created)<15 else { return }
         seen=seen.filter{let age=now-$0.value;return age>=0 && age<3}
         guard seen[event.key]==nil else { return }
+        guard !muted.contains(event.noticeKey) else { return }
         // One interaction can emit both question and permission callbacks.
         // Keep the first immediately; do not delay or extend its one-second window.
         // Missing identities must not combine unrelated sessions.
@@ -124,6 +133,12 @@ final class AgentCenter:ObservableObject {
         recent.insert(event,at:0);recent=Array(recent.prefix(12))
         guard enabled else { return }
         deliver?(event)
+    }
+    func mute(noticeKey:String) {
+        if muted.contains(noticeKey) { mutedOrder.removeAll{$0==noticeKey} }
+        else { muted.insert(noticeKey) }
+        mutedOrder.append(noticeKey)
+        if mutedOrder.count>128 { muted.remove(mutedOrder.removeFirst()) }
     }
     func change(_ row:AgentIntegration,install:Bool) {
         guard !busy else { return };busy=true;message=""

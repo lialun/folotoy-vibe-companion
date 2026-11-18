@@ -60,7 +60,7 @@ struct AgentSettingsView:View {
                 Divider()
                 Text("最近事件").font(.system(size:12,weight:.semibold))
                 ForEach(center.recent.prefix(6)) { event in
-                    HStack { Text(event.agent.title);Text(event.kind.title).foregroundStyle(.secondary);Spacer();Text(Date(timeIntervalSince1970:event.created),style:.time).monospacedDigit() }.font(.system(size:11))
+                    HStack { Text(event.agent.title);Text(event.kind.title).foregroundStyle(.secondary);Text(event.project).foregroundStyle(.secondary).lineLimit(1);Spacer();Text(Date(timeIntervalSince1970:event.created),style:.time).monospacedDigit() }.font(.system(size:11))
                 }
             }
         }.sheet(item:$center.installationNotice) { notice in

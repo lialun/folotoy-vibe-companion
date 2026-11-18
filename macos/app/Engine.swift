@@ -46,7 +46,10 @@ final class Engine {
     private var slowHeartbeat=false,lastReadiness=""
     private var peerTimeout:TimeInterval { ConnectionTiming.sessionTimeout }
     private var agentPending:[String:(body:[String:Any],expires:Date,at:Date,tries:Int)]=[:]
+    private var agentNoticeKeys:[String:String]=[:]
+    private var agentNoticeOrder:[String]=[]
     var onAgentResult:((String)->Void)?
+    var onAgentDismiss:((String)->Void)?
     private var radioPlayback:RadioPlayback?
     private var radioDelivery:RadioDelivery?
     private var radioActivity:NSObjectProtocol?
@@ -277,10 +280,24 @@ final class Engine {
             guard self.authenticated,self.peer != nil,!self.token.isEmpty,Date().timeIntervalSince(self.lastSeen)<self.peerTimeout else { DispatchQueue.main.async{self.onAgentResult?("设备离线，本次提醒未发送")};return }
             guard self.agentCapable else { DispatchQueue.main.async{self.onAgentResult?("请先更新支持 Agent 提醒的设备固件")};return }
             guard self.agentPending.count<8 else { return }
-            var body=event.deviceBody;body["type"]="agent.notify";body["id"]=event.id;body["token"]=self.token
+            let id=event.noticeID
+            self.rememberAgentNotice(event)
+            var body=event.deviceBody;body["type"]="agent.notify";body["id"]=id;body["token"]=self.token
             body["ttl_ms"]=10000;body["expires"]=Date().timeIntervalSince1970+10
-            self.agentPending[event.id]=(body,Date().addingTimeInterval(5),Date(),1);self.send(body)
+            self.agentPending[id]=(body,Date().addingTimeInterval(5),Date(),1);self.send(body)
         }
+    }
+    static func fnv1a64(_ text:String)->UInt64 {
+        var hash:UInt64=14695981039346656037
+        for byte in text.utf8 { hash=(hash ^ UInt64(byte)) &* 1099511628211 }
+        return hash == 0 ? 1 : hash
+    }
+    private func rememberAgentNotice(_ event:AgentEvent) {
+        let hash=String(Self.fnv1a64(event.noticeID))
+        if agentNoticeKeys[hash] != nil { agentNoticeOrder.removeAll{$0==hash} }
+        agentNoticeKeys[hash]=event.noticeKey
+        agentNoticeOrder.append(hash)
+        if agentNoticeOrder.count>128 { agentNoticeKeys.removeValue(forKey:agentNoticeOrder.removeFirst()) }
     }
     private func tick() {
         let now=Date()
@@ -417,6 +434,13 @@ final class Engine {
             guard let id=body["id"] as? String,agentPending.removeValue(forKey:id) != nil else { return }
             let ok=body["ok"] as? Bool==true
             DispatchQueue.main.async{self.onAgentResult?(ok ? "设备已接收提醒" : "设备未接受提醒")}
+        case "agent.dismissed":
+            guard let id=body["id"] as? String,let key=agentNoticeKeys[id] else { return }
+            DispatchQueue.main.async { self.onAgentDismiss?(key) }
+        case "pc.ping":
+            if authenticated,!token.isEmpty { beacon(broadcast:false) }
+        case "voice.ignored":
+            voiceLog.info("Voice ignored reason=\(body["reason"] as? String ?? "unknown",privacy:.public)")
         case "weather.reply":
             guard let id=body["id"] as? String,let entry=pending[id],entry.kind=="weather.cache" else{return}
             pending.removeValue(forKey:id)
@@ -451,8 +475,12 @@ final class Engine {
             if body["session"] as? String==radioPlayback?.session { stopRadioPlayback() }
         case "voice.start":
             stopWeather();stopRadioPlayback()
-            if active && ending { endVoice(immediate:true) }
-            guard authenticated,!token.isEmpty,!active else { return }
+            if active { endVoice(immediate:true) }
+            guard authenticated,!token.isEmpty else {
+                voiceLog.info("Voice start ignored: unauthenticated or missing token")
+                return
+            }
+            guard !active else { return }
             do {
                 try sink.start();try keyboard.start(shortcut);active=true;ending=false;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
                 voiceStarted=Date();voiceInitialPackets=state.packets;voiceInitialDropped=state.dropped;voiceMaxGap=0
@@ -637,6 +665,8 @@ final class Engine {
         func feed(_ body:[String:Any],ble:Bool=false) {
             var data=Data([2]);data.append(try! JSONSerialization.data(withJSONObject:body));engine.processPacket(data,from:ble ? Self.bleEndpoint : lan,viaBLE:ble)
         }
+        feed(["event":"voice.start"])
+        check(!engine.active && !engine.authenticated,"unauthenticated voice start is ignored")
         engine.beginConnectionRequest()
         let request=engine.connectionRequest,body=engine.connectionBody(type:"connection.request")
         check(!engine.requestDelivered,"request transmission alone cannot claim the device is awaiting confirmation")
@@ -660,6 +690,21 @@ final class Engine {
         check(engine.peer != nil && !engine.paused,"rediscovery restores an endpoint before authenticated reconnect")
         feed(hello,ble:true);feed(hello)
         check(engine.authenticated && engine.transport == .wifi && Date().timeIntervalSince(engine.bleLastSeen)<1,"one authorized session keeps Wi-Fi and BLE attached")
+        feed(["event":"pc.ping"])
+        feed(["event":"voice.ignored","reason":"not_ready"])
+        check(engine.authenticated && engine.peer != nil && engine.transport == .wifi && !engine.active,
+              "readiness ping and ignored voice leave connection state intact")
+        let notice=AgentEvent(agent:.codex,kind:.completed,session:"dismiss-test",key:AgentEvent.digest("dismiss-test"),project:"")
+        engine.rememberAgentNotice(notice)
+        var dismissedKey:String?
+        engine.onAgentDismiss={ dismissedKey=$0 }
+        feed(["event":"agent.dismissed","id":String(Self.fnv1a64(notice.noticeID))])
+        RunLoop.current.run(until:Date().addingTimeInterval(0.01))
+        check(dismissedKey==notice.noticeKey,"device dismissal resolves the original notice key")
+        dismissedKey=nil
+        feed(["event":"agent.dismissed","id":"0"])
+        RunLoop.current.run(until:Date().addingTimeInterval(0.01))
+        check(dismissedKey==nil,"unknown dismissal hashes are ignored")
         engine.wifiLastSeen=Date().addingTimeInterval(-7);engine.updateTransport()
         check(engine.transport == .bluetooth && engine.authenticated,"LAN timeout falls back to BLE without losing authorization")
         do {
