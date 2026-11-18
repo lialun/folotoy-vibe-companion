@@ -60,7 +60,7 @@ static void draw_hour_graph(lv_event_t *event) {
     }
 }
 static void weather_create(unsigned wp) {
-    weather_counter=label(module_root,176,61,36,&lv_font_montserrat_14,MUTED);
+    weather_counter=label(module_root,168,61,44,&lv_font_montserrat_14,MUTED);
     lv_obj_set_style_text_align(weather_counter,LV_TEXT_ALIGN_RIGHT,0);
     show(module_value,wp==0 || wp==2);
     lv_obj_set_style_text_font(module_value,&numbers36,0);
@@ -89,16 +89,16 @@ static void weather_icon_set(unsigned i,int code,bool day) {
     if (!lv_color_eq(lv_obj_get_style_image_recolor(forecast_images[i],0),lv_color_hex(color)))
         lv_obj_set_style_image_recolor(forecast_images[i],lv_color_hex(color),0);
 }
-static void weather_update(unsigned wp,const vibe_prefs_t *p,const vibe_status_t *s,uint64_t now) {
+static void weather_update(unsigned wp,unsigned page,unsigned pages,const vibe_prefs_t *p,const vibe_status_t *s,uint64_t now) {
     const vibe_weather_t *w=&s->forecast;char text[144];
-    snprintf(text,sizeof(text),"%u/4",wp+1);put(weather_counter,text);
-    if (lv_obj_get_width(module_heading)!=166) lv_obj_set_width(module_heading,166);
+    snprintf(text,sizeof(text),"%u/%u",page,pages);put(weather_counter,text);
+    if (lv_obj_get_width(module_heading)!=156) lv_obj_set_width(module_heading,156);
     text_color(module_heading,INK);if (wp==0) text_color(module_value,palette==&light_palette?INK:WEATHER_COLOR);
     lv_obj_set_y(module_value,(wp==2?141:112)-HOME_TOP);
     if (wp==0) {
         snprintf(text,sizeof(text),"%s · %s",p->city,weather_brief(w->code));
         lv_point_t size;lv_text_get_size(&size,text,&body,-1,0,LV_COORD_MAX,LV_TEXT_FLAG_NONE);
-        const lv_font_t *font=size.x>166?&small:&body;
+        const lv_font_t *font=size.x>156?&small:&body;
         if (lv_obj_get_style_text_font(module_heading,0)!=font) lv_obj_set_style_text_font(module_heading,font,0);
         if (lv_obj_get_height(module_heading)!=font->line_height) lv_obj_set_height(module_heading,font->line_height);
         put(module_heading,text);

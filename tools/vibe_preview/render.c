@@ -12,6 +12,7 @@
 static vibe_model_t model;
 static vibe_prefs_t prefs;
 static vibe_status_t status;
+static vibe_quota_store_t quotas;
 static uint64_t now=100000;
 static time_t epoch=1794125280;
 static void log_line(lv_log_level_t level,const char *text) { (void)level; fputs(text,stderr); }
@@ -22,7 +23,12 @@ time_t time(time_t *out) { time_t value=epoch; if (out) *out=value; return value
 bool bsp_lvgl_lock(uint32_t timeout) { (void)timeout; return true; }
 void bsp_lvgl_unlock(void) {}
 void vibe_snapshot(vibe_model_t *m,vibe_prefs_t *p,vibe_status_t *s) {
-    if (m) *m=model; if (p) *p=prefs; if (s) *s=status;
+    if (m) *m=model; if (p) *p=prefs; if (s) {
+        *s=status;s->quota_pages=vibe_quota_pages(&quotas,now);
+        unsigned base=prefs.weather_enabled && status.forecast.valid?4:0,selected=0;
+        s->quota.count=0;s->quota_part=s->quota_parts=0;
+        if(vibe_quota_select(model.weather_page,base,s->quota_pages,&selected))vibe_quota_page(&quotas,now,selected,&s->quota,&s->quota_part,&s->quota_parts);
+    }
 }
 static void flush(lv_display_t *display,const lv_area_t *area,uint8_t *data) {
     ++flushes;
@@ -101,6 +107,7 @@ static void popup_checks(const char *directory) {
     for (unsigned theme=0;theme<2;theme++) for (unsigned context=0;context<sizeof(contexts)/sizeof(contexts[0]);context++) {
         vibe_model_init(&model,now);model.voice_ready=true;model.enter_ready=true;
         status.peer=true;status.hotkey_ready=true;status.audio_fault=false;status.wifi=true;
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;strcpy(prefs.city,"北京");weather_fixture();
         if (context<4) model.weather_page=context;
         if (context==4 || context==8) {
@@ -158,6 +165,7 @@ static void popup_checks(const char *directory) {
 static void connection_checks(const char *directory) {
     for (unsigned theme=0;theme<2;theme++) for (unsigned context=0;context<3;context++) {
         vibe_model_init(&model,now);model.page=context==2?V_SETTINGS_PAGE:V_HOME;model.weather_page=context;
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         status.connection_request=(vibe_connection_request_t){0};vibe_ui_refresh();lv_refr_now(NULL);
         unsigned objects=object_count(lv_screen_active());
@@ -277,6 +285,7 @@ static void radio_exit_checks(const char *directory) {
     for (unsigned theme=0;theme<2;theme++) {
         vibe_model_init(&model,now);model.voice_ready=model.enter_ready=true;
         model.radio_active=model.radio_requested=true;model.radio_count=4;model.radio_index=2;
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         status.wifi=status.peer=status.audio_ready=status.hotkey_ready=true;status.radio_pcm=true;status.radio_state=V_RADIO_PLAYING;
         memset(&status.agent_alert,0,sizeof(status.agent_alert));
@@ -316,6 +325,87 @@ static void radio_exit_checks(const char *directory) {
     }
     puts("Radio exit: both themes, long/empty/error names, 200 cancel cycles, smaller page pool and explicit stop: PASS");
 }
+static void quota_checks(const char *directory) {
+    model.page=V_HOME;model.timer=V_TIMER_READY;model.radio_active=false;model.recording=false;model.screen_on=true;
+    weather_fixture();model.weather_page=0;
+    for(unsigned theme=0;theme<2;theme++) {
+        model.weather_page=0;
+        status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
+        memset(&quotas,0,sizeof(quotas));
+        vibe_quota_card_t *c=&quotas.cards[0];strcpy(c->agent,"codex");strcpy(c->name,"Codex");
+        c->expires=now+930000;c->count=1;c->metrics[0]=(vibe_quota_metric_t){.kind=1,.remaining=4700,.minutes=10080,.reset_ms=now+3*86400000};
+        strcpy(c->metrics[0].label,"Weekly");
+        char name[64];snprintf(name,sizeof(name),"quota-%s-single",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"47%"));assert(visible_text(lv_screen_active(),"每周"));
+        assert(visible_text(lv_screen_active(),"1/5"));
+        for(unsigned page=1;page<5;page++) {
+            model.weather_page=page;snprintf(name,sizeof(name),"quota-%s-order-%u",theme?"light":"dark",page);
+            capture(directory,name);char counter[12];snprintf(counter,sizeof(counter),"%u/5",page+1);
+            assert(visible_text(lv_screen_active(),counter));
+        }
+        model.weather_page=0;
+        prefs.weather_enabled=false;model.weather_page=0;
+        snprintf(name,sizeof(name),"quota-%s-weather-off",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"47%"));assert(visible_text(lv_screen_active(),"每周"));
+        prefs.weather_enabled=true;model.weather_page=0;
+        c->count=2;c->metrics[1]=c->metrics[0];c->metrics[0].minutes=300;c->metrics[0].remaining=6800;
+        snprintf(name,sizeof(name),"quota-%s-dual",theme?"light":"dark");capture(directory,name);
+        c->count=3;c->metrics[2]=c->metrics[0];c->metrics[2].minutes=43200;c->metrics[2].remaining=1234;
+        strcpy(c->name,"OpenCode Go");
+        snprintf(name,sizeof(name),"quota-%s-three-windows",theme?"light":"dark");capture(directory,name);
+        assert(vibe_quota_pages(&quotas,now)==1);
+        strcpy(c->name,"Claude Code");
+        c->count=3;c->metrics[2]=c->metrics[0];c->metrics[2].minutes=0;c->metrics[2].remaining=1;strcpy(c->metrics[2].label,"Flash Lite");
+        model.weather_page=1;snprintf(name,sizeof(name),"quota-%s-model-page",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"2/6"));assert(visible_text(lv_screen_active(),"<0.1%"));
+        model.weather_page=0;strcpy(c->name,"DSH - DeepSeek");c->count=2;
+        for(unsigned i=0;i<2;i++){c->metrics[i]=(vibe_quota_metric_t){.kind=2};strcpy(c->metrics[i].label,"Balance");strcpy(c->metrics[i].currency,i?"USD":"CNY");strcpy(c->metrics[i].amount,i?"2.40":"28.50");}
+        snprintf(name,sizeof(name),"quota-%s-balance",theme?"light":"dark");capture(directory,name);
+        c->count=1;c->metrics[0]=(vibe_quota_metric_t){.kind=1,.remaining=0,.minutes=300};
+        snprintf(name,sizeof(name),"quota-%s-zero",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"0%"));
+        c->expires=now;model.weather_page=0;snprintf(name,sizeof(name),"quota-%s-expired",theme?"light":"dark");capture(directory,name);
+        assert(!visible_text(lv_screen_active(),"DSH - DeepSeek"));
+    }
+    memset(&quotas,0,sizeof(quotas));model.weather_page=0;
+}
+static void quota_agent_checks(const char *directory) {
+    const char *names[]={"Codex","Claude Code","Gemini CLI","Gemini CLI","Qwen Code","ZCode","OpenCode","DSH - DeepSeek"};
+    const char *ids[]={"codex","claude","gemini-1","gemini-2","qwen","zcode","opencode","dsh"};
+    model.page=V_HOME;model.timer=V_TIMER_READY;model.radio_active=false;model.recording=false;model.screen_on=true;
+    weather_fixture();prefs.weather_enabled=true;
+    for(unsigned theme=0;theme<2;theme++)for(unsigned kind=0;kind<8;kind++) {
+        memset(&quotas,0,sizeof(quotas));model.weather_page=kind==3?1:0;
+        status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
+        vibe_quota_card_t *c=&quotas.cards[0];strcpy(c->agent,"simulation");strcpy(c->name,names[kind]);
+        c->expires=now+930000;c->count=1;
+        c->metrics[0]=(vibe_quota_metric_t){.kind=1,.remaining=4700,.minutes=10080,.reset_ms=now+3*86400000};
+        strcpy(c->metrics[0].label,"Weekly");
+        if(kind==1){c->count=2;c->metrics[1]=c->metrics[0];c->metrics[1].remaining=3200;c->metrics[0].minutes=300;c->metrics[0].remaining=7450;c->metrics[0].reset_ms=now+8400000;}
+        if(kind==2 || kind==3){c->count=3;for(unsigned i=0;i<3;i++){c->metrics[i]=c->metrics[0];c->metrics[i].minutes=0;c->metrics[i].remaining=i==0?2200:i==1?6400:1;strcpy(c->metrics[i].label,i==0?"Pro":i==1?"Flash":"Flash Lite");}}
+        if(kind==4){c->metrics[0].minutes=1440;c->metrics[0].remaining=8500;c->metrics[0].reset_ms=now+36000000;}
+        if(kind==5){c->metrics[0].minutes=300;c->metrics[0].remaining=0;c->metrics[0].reset_ms=now+3600000;}
+        if(kind>=6){c->count=kind==7?2:1;for(unsigned i=0;i<c->count;i++){c->metrics[i]=(vibe_quota_metric_t){.kind=2};strcpy(c->metrics[i].label,"Balance");strcpy(c->metrics[i].currency,kind==7 && i==0?"CNY":"USD");strcpy(c->metrics[i].amount,kind==6?"12.40":i?"2.40":"28.50");}}
+        char name[64];snprintf(name,sizeof(name),"quota-agent-%s-%s",theme?"light":"dark",ids[kind]);capture(directory,name);
+        assert(visible_text(lv_screen_active(),names[kind]));
+    }
+    for(unsigned theme=0;theme<2;theme++) {
+        status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
+        for(unsigned i=0;i<V_QUOTA_SLOTS;i++) {
+            quotas.cards[i]=quotas.cards[0];quotas.cards[i].count=4;
+            for(unsigned j=0;j<4;j++) {
+                quotas.cards[i].metrics[j]=(vibe_quota_metric_t){.kind=1,.remaining=9900};
+                strcpy(quotas.cards[i].metrics[j].label,"WWWWWWWWWWWWWWWWWWWWWWWW");
+            }
+        }
+        model.weather_page=9;char name[64];snprintf(name,sizeof(name),"quota-%s-max-pages",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"10/18"));
+        model.weather_page=17;snprintf(name,sizeof(name),"quota-%s-last-page",theme?"light":"dark");capture(directory,name);
+        assert(visible_text(lv_screen_active(),"18/18"));
+    }
+    memset(&quotas,0,sizeof(quotas));model.weather_page=0;
+    puts("Quota simulations: eight agent/style views, global quota-first pagination up to 18 pages, both themes: PASS");
+}
 int main(int argc,char **argv) {
     setvbuf(stdout,NULL,_IONBF,0); assert(argc==2 || argc==3); fputs("initializing LVGL\n",stderr); lv_init(); lv_log_register_print_cb(log_line); fputs("creating display\n",stderr); lv_display_t *d=lv_display_create(240,320); assert(d);
     lv_display_set_color_format(d,LV_COLOR_FORMAT_RGB565);
@@ -349,6 +439,7 @@ int main(int argc,char **argv) {
     fputs("creating UI\n",stderr); vibe_ui_init(); fputs("capturing UI\n",stderr); capture(argv[1],"home");
     const int battery_values[]={0,9,10,72,99,100,-1};
     for (unsigned theme=0;theme<2;theme++) {
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         for (unsigned i=0;i<sizeof(battery_values)/sizeof(battery_values[0]);i++) {
             status.battery=battery_values[i];
@@ -361,6 +452,7 @@ int main(int argc,char **argv) {
     assert(lv_font_get_glyph_dsc(&lv_font_montserrat_16,&bluetooth_glyph,0xf293,0));
     assert(bluetooth_glyph.box_w>0 && bluetooth_glyph.resolved_font==&lv_font_montserrat_16);
     for (unsigned theme=0;theme<2;theme++) for (unsigned connection=0;connection<4;connection++) {
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         status.wifi=(connection&1)!=0;status.ble_peer=(connection&2)!=0;status.battery=100;
         char name[64];snprintf(name,sizeof(name),"connections-%s-%u",theme?"light":"dark",connection);
@@ -380,6 +472,7 @@ int main(int argc,char **argv) {
     }
     status.wifi=true;status.ble_peer=false;status.battery=72;status.appearance.mode=V_THEME_DARK;
     for (unsigned theme=0;theme<2;theme++) {
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         vibe_agent_push(&status.agent_alert,theme+1,2,2,now,10000);
         vibe_agent_tick(&status.agent_alert,now,false);
@@ -392,6 +485,7 @@ int main(int argc,char **argv) {
     status.appearance.mode=V_THEME_DARK;
     const unsigned uv_values[]={23,50,70,90,110,500};
     for (unsigned theme=0;theme<2;theme++) {
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         for (unsigned i=0;i<7;i++) {
             char name[48];status.forecast.days[0].uv_valid=i<6;
@@ -417,6 +511,7 @@ int main(int argc,char **argv) {
     strcpy(status.radio_name,"怀旧音乐");strcpy(status.radio_description,"清晨音乐");
     const unsigned radio_states[]={V_RADIO_CONNECTING,V_RADIO_BUFFERING,V_RADIO_PLAYING,V_RADIO_ERROR};
     for (unsigned theme=0;theme<2;theme++) {
+        model.weather_page=4;
         status.appearance.mode=theme?V_THEME_LIGHT:V_THEME_DARK;
         for (unsigned i=0;i<4;i++) { char name[48];status.radio_state=radio_states[i];snprintf(name,sizeof(name),"%s-radio-%u",theme?"light":"dark",i);capture(argv[1],name); }
         model.radio_requested=false;capture(argv[1],theme?"light-radio-paused":"dark-radio-paused");model.radio_requested=true;
@@ -492,6 +587,8 @@ int main(int argc,char **argv) {
     capture(argv[1],"after-100-theme-switches");
     for (int i=0;i<100;i++) { model.weather_page=i%4;vibe_ui_refresh();lv_refr_now(NULL); }
     capture(argv[1],"after-100-weather-switches");
+    quota_checks(argv[1]);
+    quota_agent_checks(argv[1]);
     connection_checks(argv[1]);
     onboarding_checks(argv[1]);
     popup_checks(argv[1]);

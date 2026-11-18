@@ -7,6 +7,8 @@
 
 连接、切换电脑及 BLE 使用见[设备连接](connections.zh_CN.md)。
 
+[Agent 额度](quotas.zh_CN.md)介绍自动额度卡片；[接入自己的 Agent](agents-custom.zh_CN.md)说明本机提醒与额度回调。
+
 ## 首次配置
 
 ### 安装固件

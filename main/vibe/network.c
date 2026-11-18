@@ -472,7 +472,7 @@ static link_snapshot_t link_snapshot(void) {
 }
 int vibe_discovery_json(char *buffer,size_t capacity,bool authorized,bool auth_checked) {
     link_snapshot_t s=link_snapshot();
-    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
+    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"agentQuota\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
     return n>0 && (size_t)n<capacity ? n : 0;
 }
 static void hello_to(const struct sockaddr_in *target,bool via_ble,bool authorized,bool auth_checked) {

@@ -96,3 +96,5 @@ PR／分支检查新增独立的 `macos-checks.yml`，覆盖原生 Swift 测试�
 
 Mac 上解析好托管组件后，运行 `bash tools/render_readme.sh` 重新生成 README 图片。
 工具以示例数据渲染生产 UI，不替换已安装 App，不与设备通信。
+
+社区图文维护在[玩法发布文案](community-copy.zh_CN.md)。图组使用 `assets/brand/` 中的封面，以及竖版桌面端、额度、连接三张附图。更新目标为 FoloToy 已有玩法 2174，提交需要当次有效的限定授权。

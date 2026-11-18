@@ -91,27 +91,32 @@ MIT notices for agent-notify, agent-notify-dsh and PeonPing are retained in `lic
 
 | File | Dimensions | Source and use |
 | --- | --- | --- |
-| [Hero](brand/vibe-companion-hero.png) | 3200 × 1760 PNG | Chinese promotional artwork with original enclosures, vector typography and high-resolution screen illustrations following the current UI. |
-| [Community cover](brand/vibe-companion-cover.png) | 1152 × 1536 PNG | Portrait 3:4 UI artwork for the community listing, labeled as an illustration; no physical-device photograph or mockup. |
-| [Device screens](brand/vibe-companion-screens.png) | 3200 × 1200 PNG | Chinese feature gallery with native high-resolution text and vector graphics. Documentation assets only; no firmware font/image changes. |
-| [Actual firmware frames](brand/vibe-companion-screens-actual.png) | 1600 × 600 PNG | Unmodified 240 × 320 LVGL frames, retained separately as a rendering reference. |
-| [Desktop station management](brand/vibe-companion-desktop.png) | 980 × 690 pt, 2× PNG on the capture host | Production SwiftUI radio view with sample data. No device/network information is captured. |
-| [Desktop Agent integrations](brand/vibe-companion-desktop-agents.png) | 980 × 1100 pt, 2× PNG on the capture host | Production SwiftUI Agent view with sample installation states, without inspecting or changing installed Agents. |
+| [Hero](brand/vibe-companion-hero.png) | 1600 × 900 PNG | Voice input, quota management and the companion desktop app, with the existing official device reference and product UI artwork. |
+| [Community cover](brand/vibe-companion-cover.png) | 1200 × 1600 PNG | Portrait product cover focused on voice, quotas and task alerts. |
+| [Desktop app](brand/vibe-companion-desktop.png) | 1600 × 1480 PNG | Production connection/voice SwiftUI components rendered offscreen with representative state. |
+| [Quota overview](brand/vibe-companion-quotas.png) | 1600 × 900 PNG | Generic quota cards for Codex, Claude Code and OpenCode Go. Figures are artwork examples. |
+| [Connection overview](brand/vibe-companion-connect.png) | 1600 × 900 PNG | Bluetooth/Wi-Fi discovery and device approval flow. |
+| [Community desktop image](brand/folotoy-desktop.png) | 1200 × 1600 PNG | Portrait desktop-app presentation. |
+| [Community quota image](brand/folotoy-quotas.png) | 1200 × 1600 PNG | Portrait quota presentation with independent windows. |
+| [Community connection image](brand/folotoy-connect.png) | 1200 × 1600 PNG | Portrait connection guide. |
+| [Device screens](brand/vibe-companion-screens.png) | 3200 × 1200 PNG | Retained earlier feature gallery. |
+| [Actual firmware frames](brand/vibe-companion-screens-actual.png) | 1600 × 600 PNG | Retained unmodified 240 × 320 renderer reference frames. |
+| [Desktop Agent integrations](brand/vibe-companion-desktop-agents.png) | 980 × 1100 pt, 2× PNG | Retained production Agent view with representative installation states. |
 
-Regenerate on macOS, after resolving the pinned managed LVGL component:
+Regenerate on macOS after resolving the pinned managed LVGL component:
 
 ```bash
 bash tools/render_readme.sh
 ```
 
-The script runs the native firmware renderer, draws the high-resolution artwork,
-compiles the desktop preview without
-its application entry point, and renders offscreen. It does not launch/update the
-installed app, request permissions, connect to a device, or install hooks.
-`tools/render_readme.swift` is the editable composition source;
-`tools/readme_snapshot.swift` captures the real desktop view. Project artwork is
-MIT; rendered firmware typography retains its font licenses. These PNGs and tools
-are documentation-only, excluded from firmware and its runtime memory budget.
+The script renders firmware fixtures, captures the actual SwiftUI components
+with a preview-only model, and composes promotional images. The desktop capture
+uses no installed Agent data, device connections or credentials. Its source is
+`tools/readme_snapshot.swift`; composition is in `tools/render_readme.swift`.
+The device image reuses `docs/brand/ai-passport-front.png`, the existing official
+AI Passport reference retained in this repository. Project artwork is MIT;
+rendered fonts keep their original licenses. Images are documentation assets and
+are not included in the firmware memory budget.
 
 ## Retained firmware dependency licenses
 

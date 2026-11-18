@@ -35,6 +35,7 @@
 vibe_model_t v_model;
 vibe_prefs_t v_prefs;
 vibe_status_t v_status;
+vibe_quota_store_t v_quotas;
 SemaphoreHandle_t v_mutex;
 QueueHandle_t v_queue;
 static volatile bool input_overflow;
@@ -53,7 +54,13 @@ void vibe_snapshot(vibe_model_t *m, vibe_prefs_t *p, vibe_status_t *s) {
     xSemaphoreTake(v_mutex,portMAX_DELAY);
     if (m) *m=v_model;
     if (p) *p=v_prefs;
-    if (s) *s=v_status;
+    if (s) {
+        *s=v_status;
+        uint64_t now=vibe_now();s->quota_pages=vibe_quota_pages(&v_quotas,now);
+        unsigned base=v_prefs.weather_enabled && v_status.forecast.valid?4:0,selected=0;
+        s->quota.count=0;s->quota_part=s->quota_parts=0;
+        if(vibe_quota_select(v_model.weather_page,base,s->quota_pages,&selected))vibe_quota_page(&v_quotas,now,selected,&s->quota,&s->quota_part,&s->quota_parts);
+    }
     xSemaphoreGive(v_mutex);
 }
 static void load_prefs(void) {
@@ -173,7 +180,7 @@ static bool forget_computer(void) {
     nvs_close(n);
     if (saved) {
         v_status.connection_request=(vibe_connection_request_t){0};
-        v_status.token[0]=0;v_status.audio_ready=false;v_status.hotkey_ready=false;
+        memset(&v_quotas,0,sizeof(v_quotas));v_status.token[0]=0;v_status.audio_ready=false;v_status.hotkey_ready=false;
         v_status.peer_seen_ms=0;v_status.peer=false;
         intro_skipped=false;vibe_model_connection_boot(&v_model,false,false);
     }
@@ -198,7 +205,7 @@ static void receive_json(const char *s) {
             bool saved=same || nvs_open("vibe",NVS_READWRITE,&n)==ESP_OK;
             if (saved && !same) { saved=nvs_set_str(n,"token",token)==ESP_OK && nvs_commit(n)==ESP_OK;nvs_close(n); }
             if (saved) {
-                if (!same) { strcpy(v_status.token,token);vibe_network_commit(client);v_model.connection_from_menu=false; }
+                if (!same) { memset(&v_quotas,0,sizeof(v_quotas));strcpy(v_status.token,token);vibe_network_commit(client);v_model.connection_from_menu=false; }
                 v_status.connection_request.phase=V_CONNECT_NONE;prefs_reply(id,NULL);
             } else prefs_reply(id,"设备保存失败，请重试");
         }
@@ -232,6 +239,13 @@ static void receive_json(const char *s) {
                 if (!vibe_save_prefs()) v_status.appearance.tz_minutes=previous;
             }
         }
+    } else if (!strcmp(t->valuestring,"quota.cache") || !strcmp(t->valuestring,"quota.clear")) {
+        bool ok=!strcmp(t->valuestring,"quota.clear")?vibe_quota_clear(&v_quotas,o):vibe_quota_accept(&v_quotas,o,vibe_now());
+        cJSON *reply=cJSON_CreateObject();cJSON_AddStringToObject(reply,"event","quota.reply");
+        cJSON_AddBoolToObject(reply,"ok",ok);cJSON_AddNumberToObject(reply,"pages",vibe_quota_pages(&v_quotas,vibe_now()));send_object(reply);
+    } else if (!strcmp(t->valuestring,"quota.get")) {
+        cJSON *reply=cJSON_CreateObject();cJSON_AddStringToObject(reply,"event","quota.reply");
+        cJSON_AddNumberToObject(reply,"pages",vibe_quota_pages(&v_quotas,vibe_now()));send_object(reply);
     } else if (!strcmp(t->valuestring,"weather.cache")) {
         const cJSON *latitude=cJSON_GetObjectItemCaseSensitive(o,"latitude"),*longitude=cJSON_GetObjectItemCaseSensitive(o,"longitude"),*city=cJSON_GetObjectItemCaseSensitive(o,"city");
         bool location=cJSON_IsNumber(latitude) && cJSON_IsNumber(longitude) && cJSON_IsString(city) &&
@@ -259,7 +273,14 @@ static void receive_json(const char *s) {
         const time_t epoch=time(NULL);
         if (!cJSON_IsNumber(expires) || !isfinite(expires->valuedouble)) valid=false;
         else if (epoch>=1700000000 && expires->valuedouble<(double)epoch) valid=false;
-        bool accepted=valid && vibe_agent_push(&v_status.agent_alert,vibe_agent_hash(id),a,k,vibe_now(),ttl);
+        const cJSON *custom_name=cJSON_GetObjectItemCaseSensitive(o,"name");
+        if(a==7) {
+            const char *key=cJSON_IsString(agent)?agent->valuestring:"";
+            if(strlen(key)!=16 || strncmp(key,"x-",2))valid=false;
+            else for(unsigned i=2;i<16;i++)if(!((key[i]>='0' && key[i]<='9') || (key[i]>='a' && key[i]<='f')))valid=false;
+        }
+        bool accepted=valid && vibe_agent_push_named(&v_status.agent_alert,vibe_agent_hash(id),a,k,
+            cJSON_IsString(custom_name)?custom_name->valuestring:NULL,vibe_now(),ttl);
         cJSON *reply=cJSON_CreateObject();cJSON_AddStringToObject(reply,"event","agent.reply");cJSON_AddStringToObject(reply,"id",id);
         cJSON_AddBoolToObject(reply,"ok",accepted);send_object(reply);
     } else if (!strcmp(t->valuestring,"playback.status")) {
@@ -462,6 +483,9 @@ void app_main(void) {
         }
         if (vibe_agent_tick(&v_status.agent_alert,now,v_model.recording || v_model.page==V_PROVISION || connection_prompt))
             execute(V_AGENT_ALERT);
+        unsigned info_pages=(v_prefs.weather_enabled && v_status.forecast.valid?4:0)+vibe_quota_pages(&v_quotas,now);
+        if(v_model.info_pages!=info_pages){v_model.info_pages=info_pages;if(v_model.weather_page>=info_pages)v_model.weather_page=0;v_model.info_rotated_ms=now;}
+        v_model.info_blocked=v_status.agent_alert.visible || connection_prompt;
         execute(vibe_model_tick(&v_model,now));
         if (v_status.agent_alert.visible) { v_model.screen_on=true;v_model.last_activity_ms=now; }
         int bl=v_model.screen_on ? v_model.brightness : 0;

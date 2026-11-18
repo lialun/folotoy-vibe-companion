@@ -1,143 +1,60 @@
 **English** · [简体中文](README.md)
 
-# FoloToy Vibe Companion
+# Vibe Companion
 
-**Voice input and AI alerts. Your Vibe Coding companion.**
+**Voice input. AI quota management. Your own Vibe companion.**
 
-Turn a FoloToy AI Passport into a wireless dictation device and an Agent notifier.
-Hold a button to speak into your computer. Get a screen wake and a chime when an
-Agent finishes or needs your attention. Keep a timer, weather, or radio nearby.
+![Vibe Companion: voice input and AI quotas](assets/brand/vibe-companion-hero.png)
 
-**Connect over Bluetooth or Wi-Fi.** When office networks cannot admit the device,
-connect directly to your Mac over Bluetooth for dictation, Enter, Agent alerts and
-radio. The computer supplies Internet access for radio.
+Bring remaining allowances and task alerts from everyday Agents such as Codex, Claude Code and OpenCode Go to AI Passport beside you. Express ideas with voice input and keep quotas and task status in view, so you can focus on the work in front of you.
 
-**The desktop app currently supports macOS 13+ only (Apple Silicon / Intel).
-Windows is not supported yet.**
+**Bluetooth and Wi-Fi fit a variety of environments.**
 
-![Vibe Companion: wireless voice input, focus timer and Agent alerts](assets/brand/vibe-companion-hero.png)
+## A desktop app that keeps setup together
 
-[Install firmware](https://ai-passport.folotoy.cn/en/plays/2174/) · [Download the Mac app](https://github.com/lialun/folotoy-vibe-companion/releases/latest) ·
-[User guide](docs/vibe/README.md) · [Mac installation](docs/vibe/install.md) ·
-[Agent integrations](docs/vibe/agents.md) · [Design](docs/vibe/DESIGN.md)
+Discover and connect devices, configure voice input, integrate Agents and adjust everyday settings in one companion app. Keep the device beside you and manage it from your computer.
 
-## What it does
+![Vibe Companion desktop app: connection and voice setup](assets/brand/vibe-companion-desktop.png)
 
-| Feature | Experience |
+## Keep your attention on creating
+
+| The experience | What it brings you |
 | --- | --- |
-| **Speak from your desk** | Hold UP to dictate, release to finish, tap DOWN to insert Enter. Useful with a closed laptop when the computer remains awake. |
-| **Know when your Agent needs you** | Screen and sound alerts for completion, approval, questions, or errors, depending on the Agent. The compact notice disappears after five seconds; a button dismisses it and still performs its usual action. |
-| **Stay with your focus** | Start, pause, and resume a Pomodoro with one button. Each completed phase leads to the next, waiting for you to start it. Voice remains available. |
-| **Glance at the weather** | Current conditions, six-hour temperature and rain, air quality and wind, and a three-day forecast. Turn pages manually, with light and dark themes. |
-| **Listen to your stations** | Play Internet radio on the device. Search, check, add, and reorder stations in the desktop app. Speaking interrupts radio; listening reconnects afterwards. |
-| **Leave configuration to the computer** | Adjust brightness, volume, themes, timer durations, and weather city. The client lives in the menu bar and leaves the Dock when its window closes. |
+| More natural input | Use your voice to enter ideas on your computer and reduce long stretches of typing. |
+| Less checking, timely alerts | The device lights up when a task finishes, needs approval or asks a question. |
+| Allowances at a glance | See remaining allowances and reset times from your everyday Agents, updated automatically. |
+| A fit for your workflow | Set up built-in integrations with a click, or connect your own Agent for alerts and quotas. |
 
-![Vibe Companion weather, Pomodoro, radio and Agent alerts](assets/brand/vibe-companion-screens.png)
+![Quotas from multiple Agents](assets/brand/vibe-companion-quotas.png)
 
-The lower screen has one active module: weather, Pomodoro, or radio. Voice stays
-at the top. A narrow rail explains the three physical buttons in each context.
+## Agent alerts and quotas
 
-## A desktop app for the details
+| Agent | Alerts | Quotas |
+| --- | --- | --- |
+| Codex | Completion, approval, supported tool questions | Reuses the existing login and available allowance windows |
+| Claude Code | Completion, approval, questions | Five-hour and weekly allowances from status-line callbacks |
+| OpenCode | Completion, approval, questions, failure | Go five-hour, weekly and monthly allowances |
+| DeepSeek Harness, ZCode, Gemini CLI, Qwen Code | Built-in integrations; see event coverage | Real quota data can be added through custom callbacks |
+| Your own Agent | Task events through local callbacks | Percentages, multiple windows, model quotas or monetary balances |
 
-The native macOS app brings device settings, station management, and Agent
-integrations together. Search stations, check custom streams, drag to reorder,
-and save the list to your device. Close the window to keep it in the menu bar
-without a Dock icon; open it again when needed.
+Install built-in integrations in the desktop app and reuse your existing Agent login. To connect your own Agent, copy the app's prompt and let your coding Agent add alert and quota callbacks.
+Fields depend on the data each Agent provides. Unavailable data is quietly skipped. [Agent integration](docs/vibe/agents.md) · [Quota guide](docs/vibe/quotas.md)
 
-![Vibe Companion macOS app: station library and saved stations](assets/brand/vibe-companion-desktop.png)
+## More beside you
 
-## Agent integrations
+Focus with a Pomodoro timer, browse weather or enjoy the radio. Radio pauses for voice input and resumes afterward. Adjust appearance, city, stations and everyday settings in the desktop app.
 
-**Codex · Claude Code · OpenCode · DeepSeek Harness · ZCode · Gemini CLI · Qwen Code**
+## Start in three steps
 
-The desktop app detects supported local installations and installs their hooks
-or plugins. Notifications travel through the companion to the device; no extra
-push service account is needed. Coverage depends on the Agent, version, and entry
-point. Local hooks do not cover remote/cloud sessions automatically.
-See the [integration guide](docs/vibe/agents.md) for supported events, installation,
-and verification.
+1. **Install.** Flash firmware from the [FoloToy play page](https://ai-passport.folotoy.cn/plays/2174/) and download the desktop app from [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases).
+2. **Connect.** Choose Bluetooth or Wi-Fi, click Connect in the app, and confirm on the device.
+3. **Enable.** Install Agent integrations. Follow the app's guide for voice input, audio and shortcut setup.
 
-![Vibe Companion macOS app: Agent detection and integration management](assets/brand/vibe-companion-desktop-agents.png)
+![Bluetooth and Wi-Fi connection](assets/brand/vibe-companion-connect.png)
 
-## Get started
+[Installation and permissions](docs/vibe/install.md) · [Device connection](docs/vibe/connections.md) · [Features and buttons](docs/vibe/README.md)
 
-You need a **FoloToy AI Passport**, **macOS 13 or later**, and either BLE Bluetooth or a reachable local
-network. The app is a **universal binary for Apple Silicon and Intel**. Voice input
-also requires [BlackHole 2ch](https://existential.audio/blackhole/) and
-[WeType](https://z.weixin.qq.com/) or another compatible hold-to-talk input method.
-
-1. **Install the firmware and app.** Connect the device to your computer with a
-   USB data cable, open the [FoloToy play page](https://ai-passport.folotoy.cn/en/plays/2174/),
-   and follow its instructions to install the firmware directly. Download the
-   matching Mac app from [GitHub Releases](https://github.com/lialun/folotoy-vibe-companion/releases/latest)
-   and move it to Applications. See the [user guide](docs/vibe/README.md) for
-   detailed setup and button controls.
-2. **Connect the device.** Click Connect on the computer and accept with the device’s upper key. Wi-Fi and BLE can stay connected together; see [Device connections](docs/vibe/connections.md).
-   A new device offers Bluetooth, Wi-Fi and Later. BLE requires no Wi-Fi setup.
-   For Wi-Fi, choose Wi-Fi on the device, join its hotspot with your phone and
-   select a 2.4 GHz network. It remembers up to five networks and reconnects
-   automatically when you move between them.
-3. **Set up voice (optional).** In your input method,
-   select BlackHole 2ch in your input method, match the hold-to-talk shortcut,
-   and grant the app keyboard-control permission. Agent-only use does not need
-   voice setup. The [Mac installation guide](docs/vibe/install.md) covers first
-   launch and permissions.
-4. **Add the Agents you use.** Install integrations in **Agent notifications**,
-   review any trust prompt in the Agent, then verify a real event.
-
-The device sends microphone audio over the selected LAN or BLE link; the input method performs speech
-recognition under its own settings and service terms. This is not a generic USB
-or Bluetooth microphone. Dictation and Agent delivery require the companion to
-be running and the computer awake; the timer and weather work without it.
-
-### First launch and permissions on Mac
-
-Move the app to **Applications** and open it. If macOS cannot verify the developer,
-choose **System Settings → Privacy & Security → Open Anyway**.
-
-If it says the app is damaged and offers no Open Anyway button, confirm you
-downloaded it from [this repository's Release](https://github.com/lialun/folotoy-vibe-companion/releases/latest)
-and check `SHA256SUMS.txt`. In Terminal, type the command below followed by a
-space, drag the installed app from Applications into Terminal, and press Return:
-
-```bash
-xattr -dr com.apple.quarantine
-```
-
-Open the app again. Allow local network access when prompted. For voice and Enter,
-also enable **Vibe Companion** in **System Settings → Privacy & Security →
-Accessibility**. After an update, if the app still reports no permission despite
-an enabled switch, remove the old entry and add the current app from Applications.
-
-## Platform and compatibility
-
-- **Available implementation:** ESP32-C3 firmware and a macOS client. Windows and
-  Linux clients are not implemented.
-- **Validation limits:** This iteration has been exercised on an Intel Mac and the
-  target device; the package contains Apple Silicon and Intel binaries. Current
-  Apple Silicon hardware, clean-machine installation, and multiple physical
-  devices/computers still need verification. Radio availability depends on the
-  station, stream format, and network.
-
-## Build and contribute
-
-Firmware uses **ESP-IDF 5.5.3**; the desktop client uses **Swift, SwiftUI, and
-AppKit**. No Electron runtime is bundled.
-
-```bash
-# Repository checks and host tests; no device required
-./tools/validate.sh --static
-
-# Firmware build and verified merged image; activate ESP-IDF 5.5.3 first
-./tools/validate.sh
-
-# Universal macOS app, native tests, DMG and ZIP; run on a Mac
-bash macos/build.sh
-```
-
-[Build and packaging](docs/vibe/release.md) ·
-[Interaction, UI, and memory conventions](docs/vibe/DESIGN.md) ·
-[Contributing](.github/CONTRIBUTING.md) · [Support](.github/SUPPORT.md)
+The current desktop app supports macOS 13 and later on Apple Silicon and Intel. Speech recognition uses a compatible input method. Keep the computer awake and the app running; the computer fetches radio and online quota data.
 
 ## Credits and license
 

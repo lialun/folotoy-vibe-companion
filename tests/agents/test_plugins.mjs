@@ -31,3 +31,30 @@ for(const type of ['session.execution.started','session.execution.interrupted','
 assert.equal(ignoredLookups,0)
 await createAdapter({getSession:async()=>{throw Error('gone')},forward:()=>{throw Error('must not send')}}).event({type:'permission.asked',data:{sessionID:'s'}})
 console.log('Agent native plugins: PASS (waterfall identity, errors, root filter, V2 mapping, idle suppression)')
+
+const {normalizeGo,createQuotaCollector}=await import('../../macos/agents/opencode/quota.mjs')
+let clock=1790000000000,calls=0,delivered=[]
+const meter=(percent,status='ok')=>({percent,status,resetsAt:new Date(clock+86400000).toISOString()})
+const go={usage:{rolling:meter(25),weekly:meter(100,'rate-limited'),monthly:meter(0)}}
+assert.deepEqual(normalizeGo(go,'org-private',clock).items.map(x=>x.remaining),[75,0,100])
+assert.equal(normalizeGo({usage:{...go.usage,rolling:meter(true)}},'org',clock),undefined)
+assert.equal(normalizeGo({usage:{...go.usage,monthly:{...meter(10),resetsAt:'invalid'}}},'org',clock),undefined)
+const integration={connection:{active:async()=>({id:'selected'}),resolve:async()=>({type:'oauth',access:'synthetic-test-token',metadata:{orgID:'org-test'}})}}
+const fetcher=async(url,options)=>{calls++;assert.equal(url,'https://opencode.ai/zen/go/v1/usage');assert.equal(options.redirect,'error');assert.equal(options.headers['x-opencode-org-id'],'org-test');return {ok:true,text:async()=>JSON.stringify(go)}}
+const collector=createQuotaCollector({integration,fetcher,clock:()=>clock,forward:x=>delivered.push(x)})
+collector.activity();await new Promise(r=>setImmediate(r))
+assert.equal(calls,1);assert.equal(delivered.length,1)
+assert.equal(JSON.stringify(delivered).includes('org-test'),false);assert.equal(JSON.stringify(delivered).includes('synthetic-test-token'),false)
+collector.activity();await collector.tick();assert.equal(calls,1)
+clock+=300000;await collector.tick();assert.equal(calls,2)
+clock+=300000;await collector.tick();assert.equal(calls,2) // idle ten minutes
+collector.close();collector.activity();await collector.tick();assert.equal(calls,2)
+let badCalls=0
+const bad=createQuotaCollector({integration,clock:()=>clock,fetcher:async()=>{badCalls++;return {ok:false,headers:new Map()}}})
+bad.activity();await new Promise(r=>setImmediate(r));clock+=300000;await bad.tick();assert.equal(badCalls,1)
+clock+=300000;await bad.tick();assert.equal(badCalls,1) // idle prevents another query
+bad.activity();await new Promise(r=>setImmediate(r));assert.equal(badCalls,2)
+bad.close()
+const unsafe=createQuotaCollector({integration:{connection:{active:async()=>({}),resolve:async()=>({type:'key',key:'private',metadata:{orgID:'org',server:'https://other.example'}})}},fetcher:async()=>{throw Error('credential must not leave allowed origin')},forward:()=>{throw Error('must not send')}})
+unsafe.activity();await new Promise(r=>setImmediate(r));unsafe.close()
+console.log('OpenCode Go quota: PASS (three real windows, zero, selected login, cadence, expiry, retry, bounded destination)')

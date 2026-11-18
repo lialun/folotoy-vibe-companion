@@ -25,7 +25,9 @@ typedef struct {
     unsigned selected, completed, focus_minutes, break_minutes, radio_index, radio_count;
     unsigned phase_minutes; /* Snapshot the active phase; preference edits affect the next phase. */
     unsigned brightness, volume, screen_seconds;
-    unsigned weather_page;
+    unsigned weather_page,info_pages;
+    bool info_blocked;
+    uint64_t info_rotated_ms;
     bool intro_dismissed, connection_from_menu, guide_wifi, provision_to_ble;
     vibe_page_t provision_return;
     vibe_theme_mode_t theme_mode;

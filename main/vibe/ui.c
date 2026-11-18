@@ -203,6 +203,7 @@ static void home_line(unsigned i,int x,int y,int width,const lv_font_t *font,uin
 }
 #include "ui_weather.inc"
 static unsigned module_count;
+#include "ui_quota.inc"
 #include "ui_radio.inc"
 static void create_module(int kind) {
     radio_slide_stop();
@@ -210,10 +211,14 @@ static void create_module(int kind) {
     module_root=box(home,0,0,216,320-HOME_TOP,BG,0);lv_obj_move_to_index(module_root,0);
     module_heading=label(module_root,8,60,204,&body,INK);
     module_value=label(module_root,8,88,204,&lv_font_montserrat_48,INK);
-    module_count=kind==6?6:kind==0?9:kind==1?9:kind==2?3:kind==3?10:kind==4?12:1;
+    module_count=kind==7?1+quota_rows*3:kind==6?6:kind==0?9:kind==1?9:kind==2?3:kind==3?10:kind==4?12:1;
     for (unsigned i=0;i<module_count;i++) {
         module_text[i]=label(module_root,8,120,204,&small,INK);
         if (kind>0) lv_label_set_long_mode(module_text[i],LV_LABEL_LONG_WRAP);
+        if (kind==7) {
+            lv_obj_set_height(module_text[i],small.line_height);
+            lv_label_set_long_mode(module_text[i],LV_LABEL_LONG_DOT);
+        }
         if (kind==6 && (i==1 || i==4 || i==5)) {
             lv_obj_set_height(module_text[i],i==4?small.line_height:48);lv_label_set_long_mode(module_text[i],LV_LABEL_LONG_DOT);
         }
@@ -224,21 +229,27 @@ static void create_module(int kind) {
     else if (kind<5) weather_create((unsigned)kind-1);
     else show(module_value,false);
     if (kind==6) radio_create();
+    if (kind==7) quota_create();
     module_kind=kind;
 }
 static void home_module(const vibe_model_t *m,const vibe_prefs_t *p,const vibe_status_t *s,uint64_t now) {
     char text[120];bool timer=m->timer!=V_TIMER_READY;
     bool weather=!m->radio_active && !timer && p->weather_enabled && s->forecast.valid;
-    unsigned wp=m->weather_page%4;
-    int kind=m->radio_active?6:timer?0:weather?(int)wp+1:5;
-    if (module_kind!=kind) create_module(kind);
+    unsigned base=weather?4:0,extra=s->quota_pages,wp=0,total=base+extra;
+    unsigned page=total?m->weather_page%total+1:1;
+    bool selected_quota=vibe_quota_select(m->weather_page,base,extra,&wp);
+    vibe_quota_card_t quota=s->quota;
+    bool quota_visible=!m->radio_active && !timer && selected_quota && quota.count;
+    int kind=m->radio_active?6:timer?0:quota_visible?7:weather?(int)wp+1:5;
+    if (module_kind!=kind || (kind==7 && quota_rows!=quota.count)) {if(kind==7)quota_rows=quota.count;create_module(kind);}
     home_lines=0;
     if (m->radio_active) {
         radio_update(m,s);
         return;
     }
+    if (quota_visible) {quota_update(&quota,page,total,now);return;}
     if (weather) {
-        weather_update(wp,p,s,now);
+        weather_update(wp,page,total,p,s,now);
         for (unsigned i=0;i<module_count;i++) show(module_text[i],(home_lines & (1U<<i))!=0);
         return;
     }

@@ -86,23 +86,29 @@ agent-notify、agent-notify-dsh 与 PeonPing 的 MIT 许可保留于 `licenses/`
 
 | 文件 | 尺寸 | 来源与用途 |
 | --- | --- | --- |
-| [宣传图](brand/vibe-companion-hero.png) | 3200 × 1760 PNG | 中文宣传封面：原创机身造型、矢量文字，以及按照现有 UI 制作的高清屏幕内容。 |
-| [社区封面](brand/vibe-companion-cover.png) | 1152 × 1536 PNG | 社区玩法页使用的竖版 3:4 界面插画，图内标明插画，不包含设备实拍或外观模拟。 |
-| [设备界面](brand/vibe-companion-screens.png) | 3200 × 1200 PNG | 中文功能展示，使用原生高清文字与矢量图形。仅用于文档，不改变固件字体或图片。 |
-| [真实固件渲染](brand/vibe-companion-screens-actual.png) | 1600 × 600 PNG | 单独保留未经修改的 240 × 320 LVGL 渲染帧，供开发对照。 |
-| [桌面端电台管理](brand/vibe-companion-desktop.png) | 980 × 690 pt，截图机上输出 2× PNG | 生产 SwiftUI 收音机页面，使用样例数据，不采集设备／网络信息。 |
-| [桌面端 Agent 接入](brand/vibe-companion-desktop-agents.png) | 980 × 1100 pt，截图机上输出 2× PNG | 生产 SwiftUI Agent 页面，使用样例安装状态，不读取或修改实际 Agent 安装。 |
+| [宣传图](brand/vibe-companion-hero.png) | 1600 × 900 PNG | 语音输入、额度管理和配套桌面端，使用已有官方设备参考图及产品界面排版。 |
+| [社区封面](brand/vibe-companion-cover.png) | 1200 × 1600 PNG | 突出语音、额度和任务提醒的竖版封面。 |
+| [桌面端](brand/vibe-companion-desktop.png) | 1600 × 1480 PNG | 使用代表性状态离屏渲染生产版本的连接与语音 SwiftUI 组件。 |
+| [额度展示](brand/vibe-companion-quotas.png) | 1600 × 900 PNG | Codex、Claude Code、OpenCode Go 通用额度卡片；数字为宣传排版示例。 |
+| [连接说明](brand/vibe-companion-connect.png) | 1600 × 900 PNG | 蓝牙／Wi-Fi 发现与设备确认流程。 |
+| [社区桌面端图](brand/folotoy-desktop.png) | 1200 × 1600 PNG | 竖版桌面 App 展示。 |
+| [社区额度图](brand/folotoy-quotas.png) | 1200 × 1600 PNG | 分别展示独立额度窗口的竖图。 |
+| [社区连接图](brand/folotoy-connect.png) | 1200 × 1600 PNG | 竖版连接指引。 |
+| [设备界面](brand/vibe-companion-screens.png) | 3200 × 1200 PNG | 保留的早期功能展示。 |
+| [真实固件渲染](brand/vibe-companion-screens-actual.png) | 1600 × 600 PNG | 保留的未经修改的 240 × 320 渲染参考帧。 |
+| [桌面端 Agent 接入](brand/vibe-companion-desktop-agents.png) | 980 × 1100 pt，2× PNG | 保留的生产 Agent 界面，使用代表性安装状态。 |
 
-在 macOS 上、解析好固定的 LVGL 托管组件后重新生成：
+在 macOS 解析固定版本 LVGL 依赖后重新生成：
 
 ```bash
 bash tools/render_readme.sh
 ```
 
-脚本运行原生固件渲染器、绘制高清宣传素材，编译不含应用入口的桌面预览并离屏渲染，不启动／更新已安装
-App，不申请权限、连接设备或安装 Hook。`tools/render_readme.swift` 是可编辑排版源码，
-`tools/readme_snapshot.swift` 捕获真实桌面视图。原创画面采用 MIT 许可，固件字体保留
-对应许可。这些 PNG 和工具仅用于文档，不进入固件或设备运行内存。
+脚本渲染固件样本，以仅供预览的模型捕获实际 SwiftUI 组件，再完成宣传排版。
+桌面捕获不读取已安装 Agent 的数据、不连接设备，也不使用凭据。源文件为
+`tools/readme_snapshot.swift`，排版见 `tools/render_readme.swift`。设备图片复用
+仓库已有的官方 AI Passport 参考图 `docs/brand/ai-passport-front.png`。
+原创画面采用 MIT 许可，字体保留各自许可；图片仅用于文档，不占固件运行内存。
 
 ## 保留的固件依赖许可
 

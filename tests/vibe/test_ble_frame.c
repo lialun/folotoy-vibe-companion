@@ -5,13 +5,20 @@
 int main(void) {
     vibe_ble_links_t registry;vibe_ble_links_init(&registry);
     /* Reproduce macOS bond restoration: subscription precedes CONNECT. */
-    vibe_ble_link_t *early=vibe_ble_link_ensure(&registry,1);assert(early);early->subscribed=true;
+    vibe_ble_link_subscription(&registry,1,15,15,true);
+    vibe_ble_link_t *early=vibe_ble_link_find(&registry,1);assert(early && early->subscribed);
+    vibe_ble_link_subscription(&registry,1,4,15,false);
+    assert(early->subscribed); /* Service Changed indication cannot disable TX. */
+    vibe_ble_link_subscription(&registry,1,15,15,false);assert(!early->subscribed);
+    vibe_ble_link_subscription(&registry,1,15,15,true);assert(early->subscribed);
+    vibe_ble_link_subscription(&registry,2,4,15,true);
+    assert(!vibe_ble_link_find(&registry,2)); /* Foreign events cannot create slots. */
     uint32_t first_generation=early->generation;early->incoming.used=42;
     vibe_ble_link_t *connected=vibe_ble_link_ensure(&registry,1);
     assert(connected==early && connected->subscribed && connected->generation==first_generation && connected->incoming.used==42);
     assert(vibe_ble_link_ensure(&registry,2));assert(!vibe_ble_link_ensure(&registry,3));
     vibe_ble_link_remove(&registry,1);assert(!vibe_ble_link_find(&registry,1));
-    vibe_ble_link_subscription(&registry,1,false);
+    vibe_ble_link_subscription(&registry,1,15,15,false);
     assert(!vibe_ble_link_find(&registry,1));
     assert(vibe_ble_link_ensure(&registry,3));
     vibe_ble_link_remove(&registry,3);

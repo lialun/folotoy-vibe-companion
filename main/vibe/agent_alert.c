@@ -14,7 +14,15 @@ const char *vibe_agent_action(unsigned kind) {
     return kind<4?actions[kind]:"";
 }
 bool vibe_agent_push(vibe_agent_alert_t *s,uint64_t id,unsigned agent,unsigned kind,uint64_t now,unsigned ttl) {
-    if (!id || agent>=7 || kind>=4 || !ttl || ttl>10000) return false;
+    if(agent>=7)return false;
+    return vibe_agent_push_named(s,id,agent,kind,NULL,now,ttl);
+}
+bool vibe_agent_push_named(vibe_agent_alert_t *s,uint64_t id,unsigned agent,unsigned kind,const char *name,uint64_t now,unsigned ttl) {
+    if (!s || !id || agent>7 || kind>=4 || !ttl || ttl>10000) return false;
+    if(agent==7) {
+        if(!name || !name[0] || strlen(name)>32)return false;
+        for(const unsigned char *p=(const unsigned char *)name;*p;p++)if(*p<32 || *p>126)return false;
+    }
     for (unsigned i=0;i<16;i++) if (s->seen[i]==id) return true;
     if (s->count==4) {
         /* Keep waiting-for-human events over an expendable completion. */
@@ -23,7 +31,9 @@ bool vibe_agent_push(vibe_agent_alert_t *s,uint64_t id,unsigned agent,unsigned k
         memmove(&s->items[victim],&s->items[victim+1],(3-victim)*sizeof(s->items[0]));--s->count;
     }
     s->seen[s->seen_next++%16]=id;
-    s->items[s->count++]=(vibe_agent_item_t){.id=id,.expires=now+ttl,.agent=agent,.kind=kind};
+    s->items[s->count]=(vibe_agent_item_t){.id=id,.expires=now+ttl,.agent=agent,.kind=kind};
+    if(agent==7)memcpy(s->items[s->count].name,name,strlen(name)+1);
+    s->count++;
     return true;
 }
 bool vibe_agent_tick(vibe_agent_alert_t *s,uint64_t now,bool blocked) {

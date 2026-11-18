@@ -256,6 +256,7 @@ static void exit_preserves_time(void) {
 }
 static void weather_navigation(void) {
     vibe_model_t m;vibe_model_init(&m,0);m.voice_ready=m.enter_ready=true;
+    m.info_blocked=true; /* Manual path; automatic carousel is covered by test_quota.c. */
     vibe_model_tick(&m,7999);assert(m.weather_page==0);
     vibe_model_tick(&m,8000);assert(m.weather_page==0 && m.last_activity_ms==0);
     tap(&m,V_SETTINGS,9000);assert(m.weather_page==1);

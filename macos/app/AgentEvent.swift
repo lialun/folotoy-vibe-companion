@@ -3,18 +3,25 @@ import Combine
 
 import CryptoKit
 
-enum AgentID:String,CaseIterable,Codable,Identifiable {
-    case codex,claude,opencode,dsh,zcode,gemini,qwen
-    var id:String { rawValue }
-    var title:String { switch self { case .codex:return "Codex";case .claude:return "Claude Code";case .opencode:return "OpenCode";case .dsh:return "DeepSeek Harness";case .zcode:return "ZCode";case .gemini:return "Gemini CLI";case .qwen:return "Qwen Code" } }
-    var coverage:String {
-        switch self {
-        case .codex:return "完成 · 审批 · 支持工具 Hook 的提问"
-        case .gemini:return "完成 · 审批"
-        case .zcode:return "完成 · 审批"
-        default:return "完成 · 审批 · 提问"
-        }
+struct AgentID:RawRepresentable,Hashable,CaseIterable,Codable,Identifiable {
+    let rawValue:String
+    static let codex=AgentID("codex"),claude=AgentID("claude"),opencode=AgentID("opencode"),dsh=AgentID("dsh"),zcode=AgentID("zcode"),gemini=AgentID("gemini"),qwen=AgentID("qwen")
+    static let allCases:[AgentID]=[codex,claude,opencode,dsh,zcode,gemini,qwen]
+    private init(_ value:String) {rawValue=value}
+    init?(rawValue:String) {
+        guard Self.allCases.contains(where:{$0.rawValue==rawValue}) || rawValue.range(of:#"^x-[0-9a-f]{14}$"#,options:.regularExpression) != nil else{return nil}
+        self.rawValue=rawValue
     }
+    static func custom(_ source:String)->AgentID {AgentID("x-"+AgentEvent.digest(source).prefix(14))}
+    var isCustom:Bool {rawValue.hasPrefix("x-")}
+    init(from decoder:Decoder)throws {
+        let container=try decoder.singleValueContainer(),value=try container.decode(String.self)
+        guard let id=Self(rawValue:value) else {throw DecodingError.dataCorruptedError(in:container,debugDescription:"Invalid Agent identity")};self=id
+    }
+    func encode(to encoder:Encoder)throws {var container=encoder.singleValueContainer();try container.encode(rawValue)}
+    var id:String {rawValue}
+    var title:String {switch self {case .codex:return "Codex";case .claude:return "Claude Code";case .opencode:return "OpenCode";case .dsh:return "DeepSeek Harness";case .zcode:return "ZCode";case .gemini:return "Gemini CLI";case .qwen:return "Qwen Code";default:return "Agent"}}
+    var coverage:String {switch self {case .codex:return "完成 · 审批 · 支持工具 Hook 的提问";case .gemini,.zcode:return "完成 · 审批";default:return "完成 · 审批 · 提问"}}
 }
 enum AgentKind:String,Codable { case completed,approval,input,failed
     var title:String { switch self {case .completed:return "任务已完成";case .approval:return "等待审批";case .input:return "等待回答";case .failed:return "任务出错"} }
@@ -23,6 +30,8 @@ struct AgentEvent:Codable,Identifiable {
     var id=UUID().uuidString
     let agent:AgentID,kind:AgentKind,session:String,key:String,project:String
     var created=Date().timeIntervalSince1970
+    var name:String?
+    var displayTitle:String {name ?? agent.title}
     static func digest(_ text:String)->String { SHA256.hash(data:Data(text.utf8)).map{String(format:"%02x",$0)}.joined() }
     // Never forward prompts, responses, tool input or transcripts. Keep only identities.
     static func parse(agent:AgentID,event:String="",payload:[String:Any])->AgentEvent? {
@@ -55,8 +64,8 @@ struct AgentEvent:Codable,Identifiable {
         let key=digest([agent.rawValue,session,kind.rawValue,turn,request].joined(separator:"|"))
         return AgentEvent(agent:agent,kind:kind,session:session,key:key,project:project)
     }
-    var valid:Bool { UUID(uuidString:id) != nil && session.utf8.count<=800 && key.count==64 && project.count<=48 && created.isFinite }
-    var deviceBody:[String:Any] { ["agent":agent.rawValue,"kind":kind.rawValue] }
+    var valid:Bool { UUID(uuidString:id) != nil && session.utf8.count<=800 && key.count==64 && project.count<=48 && created.isFinite && (name.map{AgentQuotaSample.ascii($0,32)} ?? !agent.isCustom) }
+    var deviceBody:[String:Any] { ["agent":agent.rawValue,"kind":kind.rawValue,"name":displayTitle] }
 }
 
 struct AgentInstallNotice:Identifiable {
@@ -86,6 +95,9 @@ final class AgentCenter:ObservableObject {
     @Published var enabled=UserDefaults.standard.object(forKey:"agentAlertsEnabled") as? Bool ?? true {
         didSet { if !preview { UserDefaults.standard.set(enabled,forKey:"agentAlertsEnabled") } }
     }
+    let quota=AgentQuotaCenter()
+    @Published var quotaSamples:[AgentQuotaSample]=[]
+    var deliverQuota:(([AgentQuotaSample])->Void)?
     private let preview:Bool
     private var receiver:AgentReceiver?
     private var seen:[String:TimeInterval]=[:]
@@ -94,7 +106,8 @@ final class AgentCenter:ObservableObject {
     init(preview:Bool=false) {
         self.preview=preview
         if preview { integrations=AgentID.allCases.map{AgentIntegration(agent:$0,executable:nil,application:nil,installed:false)};return }
-        do { let r=AgentReceiver();try r.start { [weak self] in self?.accept($0) };receiver=r }
+        quota.onChange={ [weak self] samples in self?.quotaSamples=samples;self?.deliverQuota?(samples) }
+        do { let r=AgentReceiver();try r.start(quota:{[weak self] in self?.quota.accept($0)},activity:{[weak self] in self?.quota.activity($0)}) { [weak self] in self?.accept($0) };receiver=r }
         catch { message="通知接收未启动："+error.localizedDescription }
         refresh()
     }
@@ -102,7 +115,7 @@ final class AgentCenter:ObservableObject {
         guard !busy else { return };busy=true;scans+=1;let scan=scans
         DispatchQueue.global(qos:.utility).async { [self] in
             let rows=AgentInstaller.detect()
-            DispatchQueue.main.async { [weak self] in guard let self=self,self.scans==scan else { return };self.integrations=rows;self.busy=false }
+            DispatchQueue.main.async { [weak self] in guard let self=self,self.scans==scan else { return };self.integrations=rows;self.quota.configure(rows);self.busy=false }
         }
     }
     func accept(_ event:AgentEvent,now:TimeInterval=Date().timeIntervalSince1970) {

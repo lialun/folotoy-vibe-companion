@@ -7,7 +7,7 @@ set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ROOT}/managed_components/lvgl__lvgl lvgl)
 set(VIBE_PREVIEW_UI_SOURCE "${ROOT}/main/vibe/ui.c" CACHE FILEPATH "UI source for before/after memory comparisons")
-add_executable(preview render.c ${VIBE_PREVIEW_UI_SOURCE} ${ROOT}/main/vibe/model.c ${ROOT}/main/vibe/weather.c ${ROOT}/main/vibe/agent_alert.c ${ROOT}/main/vibe/appearance.c ${ROOT}/main/vibe/signal.c
+add_executable(preview render.c ${VIBE_PREVIEW_UI_SOURCE} ${ROOT}/main/vibe/model.c ${ROOT}/main/vibe/weather.c ${ROOT}/main/vibe/quota.c ${ROOT}/main/vibe/agent_alert.c ${ROOT}/main/vibe/appearance.c ${ROOT}/main/vibe/signal.c
     ${ROOT}/main/vibe/vibe_font.c ${ROOT}/main/vibe/font_20.c ${ROOT}/tests/vibe/vendor/cjson/cJSON.c)
 target_include_directories(preview PRIVATE . ${ROOT}/main/vibe ${ROOT}/tests/vibe/vendor/cjson ${ROOT}/tests/vibe/stubs ${ROOT}/tests/audio_stubs)
 target_link_libraries(preview PRIVATE lvgl m)

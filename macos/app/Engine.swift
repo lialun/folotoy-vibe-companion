@@ -43,6 +43,8 @@ final class Engine {
     private var weatherCapable=false,weatherJob:WeatherFetch?,weatherLocation:WeatherLocation?,weatherGeneration=0,weatherHasAir=false
     private var nextWeather=Date.distantPast
     private var agentCapable=false
+    private var quotaCapable=false,quotaSamples:[AgentID:AgentQuotaSample]=[:],quotaSent:[AgentID:(String,Date)]=[:]
+    private var quotaAcceptanceReply:(([String:Any])->Void)?
     private var slowHeartbeat=false,lastReadiness=""
     private var peerTimeout:TimeInterval { ConnectionTiming.sessionTimeout }
     private var agentPending:[String:(body:[String:Any],expires:Date,at:Date,tries:Int)]=[:]
@@ -272,6 +274,25 @@ final class Engine {
     private func sendStatus() {
         if !token.isEmpty { send(["type":"pc.status","token":token,"radioPCM":1,"radioFormats":RadioFormat.supportedMask,"audioReady":AudioSink.deviceUID() != nil,"hotkeyReady":Shortcut.permitted,"epoch":Int(Date().timeIntervalSince1970),"tz":TimeZone.current.secondsFromGMT()/60,"idleHeartbeat":LANSocket.negotiatedHeartbeatSeconds]) }
     }
+    func updateAgentQuotas(_ samples:[AgentQuotaSample]) { work.async {
+        let next=Dictionary(uniqueKeysWithValues:samples.map{($0.agent,$0)})
+        if self.authenticated,self.quotaCapable {
+            for (agent,old) in self.quotaSamples where next[agent]==nil {
+                self.send(["type":"quota.clear","token":self.token,"agent":agent.rawValue,"owner":old.owner,"sample":old.id])
+            }
+        }
+        self.quotaSamples=next;self.flushQuotas()
+    } }
+    private func flushQuotas() {
+        guard authenticated,quotaCapable,!paused,!active,Date().timeIntervalSince(lastSeen)<peerTimeout else{return}
+        let now=Date()
+        for (agent,sample) in quotaSamples {
+            if let sent=quotaSent[agent],sent.0==sample.id,now.timeIntervalSince(sent.1)<30 {continue}
+            guard var body=sample.wire(at:now) else{continue}
+            body["type"]="quota.cache";body["token"]=token
+            if send(body) {quotaSent[agent]=(sample.id,now)}
+        }
+    }
     func notifyAgent(_ event:AgentEvent) {
         work.async {
             guard self.authenticated,self.peer != nil,!self.token.isEmpty,Date().timeIntervalSince(self.lastSeen)<self.peerTimeout else { DispatchQueue.main.async{self.onAgentResult?("设备离线，本次提醒未发送")};return }
@@ -317,7 +338,7 @@ final class Engine {
             if now>entry.expires || entry.tries>=4 { agentPending.removeValue(forKey:id);DispatchQueue.main.async{self.onAgentResult?("设备未确认提醒，请检查连接")} }
             else { send(entry.body);agentPending[id]=(entry.body,entry.expires,now,entry.tries+1) }
         }
-        refreshWeather();publish()
+        refreshWeather();flushQuotas();publish()
     }
     private func receive() {
         var bytes=[UInt8](repeating:0,count:2048)
@@ -373,6 +394,7 @@ final class Engine {
             let rebooted=bootID != nil && (body["boot"] as? Int) != bootID
             if rebooted { disconnect("设备重新连接，请确认未完成的保存") }
             let reconnect = !authenticated
+            quotaCapable=body["agentQuota"] as? Int==1
             weatherCapable=body["weatherCache"] as? Int==1;agentCapable=body["agentNotify"] as? Int==1;slowHeartbeat=body["idleHeartbeat"] as? Int==30
             state.powerAvailable=body["powerDiagnostics"] as? Int==1
             if reconnect { recentEvents=[];settingsRevision=nil }
@@ -413,6 +435,7 @@ final class Engine {
             recentEvents.append(id);if recentEvents.count>64 { recentEvents.removeFirst() }
         }
         switch body["event"] as? String ?? "" {
+        case "quota.reply":quotaAcceptanceReply?(body) // No front-end error state.
         case "agent.reply":
             guard let id=body["id"] as? String,agentPending.removeValue(forKey:id) != nil else { return }
             let ok=body["ok"] as? Bool==true
@@ -615,7 +638,7 @@ final class Engine {
     private func disconnect(_ message:String) {
         stopWeather();weatherLocation=nil;stopRadioPlayback()
         authenticated=false;pairing=false;connectionMessage="";slowHeartbeat=false;wifiLastSeen = .distantPast;bleLastSeen = .distantPast;state.powerAvailable=false;state.powerLoading=false
-        agentPending.removeAll();agentCapable=false;
+        agentPending.removeAll();agentCapable=false;quotaCapable=false;quotaSent.removeAll();
         cancelRadio(message)
         let interrupted = !pending.isEmpty
         pending.removeAll();peer=nil;state.address="";lastSeen = .distantPast;lastBeacon = .distantPast
@@ -770,5 +793,60 @@ final class Engine {
             } else if let completion=completion { DispatchQueue.main.async(execute:completion) }
             bluetooth?.disconnect();reader=nil;socketFD = -1;localPort=0
         }
+    }
+}
+
+// Explicit acceptance command. Reuses saved authorization and never pairs or
+// alters preferences. Test observations are removed before returning control.
+extension Engine {
+    static func runQuotaDeviceTest(ble:Bool)->Int32 {
+        guard let id=UserDefaults.standard.string(forKey:"device"),PairingStore.load(id) != nil else{return 2}
+        setbuf(stdout,nil)
+        let engine=Engine(lanEnabled:!ble),clock=DispatchSource.makeTimerSource(queue:.main)
+        let deadline=Date().addingTimeInterval(50),sample=UUID().uuidString,newSample=UUID().uuidString
+        let stamp=Int(Date().timeIntervalSince1970*1000)
+        var armed=false,done=false,step=0,baseline=0
+        func send(_ body:[String:Any]) {_=engine.send(body.merging(["token":engine.token]){a,_ in a},viaBLE:ble)}
+        func clear(_ value:String) {send(["type":"quota.clear","agent":"quota-test","owner":"local-acceptance","sample":value])}
+        func fixture(_ value:String,_ ttl:Int,_ version:Int)->[String:Any] {
+            ["type":"quota.cache","schema":1,"agent":"quota-test","name":"Quota test","owner":"local-acceptance","sample":value,"stamp":version,"ttl_ms":ttl,"age_ms":0,
+             "items":[["kind":1,"label":"Weekly","remaining":4600,"minutes":10080,"reset_ms":100000]]]
+        }
+        func finish(_ success:Bool) {
+            guard !done else{return};done=true;clock.cancel();clear(sample);clear(newSample)
+            print("Quota \(ble ? "BLE-only":"LAN") acceptance: \(success ? "PASS":"FAIL")")
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.4) {engine.stop {exit(success ? 0:1)}}
+        }
+        engine.quotaAcceptanceReply={body in
+            guard !done,let pages=body["pages"] as? Int else{return}
+            switch step {
+            case 0:
+                baseline=pages;step=1;send(fixture(sample,2500,stamp))
+            case 1:
+                guard body["ok"] as? Bool==true,pages==baseline+1 else{finish(false);return}
+                print("Quota accepted over \(ble ? "BLE-only":"LAN")");step=2
+                engine.work.asyncAfter(deadline:.now()+1) {guard !done else{return};send(fixture(sample,2500,stamp))}
+            case 2:
+                guard body["ok"] as? Bool==true else{finish(false);return};step=3
+                engine.work.asyncAfter(deadline:.now()+1.8) {guard !done else{return};send(["type":"quota.get"])}
+            case 3:
+                guard pages==baseline else{finish(false);return}
+                print("Duplicate did not renew TTL; expiry verified");step=4;send(fixture(newSample,30000,stamp+1))
+            case 4:
+                guard body["ok"] as? Bool==true,pages==baseline+1 else{finish(false);return};step=5;clear(sample)
+            case 5:
+                guard body["ok"] as? Bool==false,pages==baseline+1 else{finish(false);return}
+                print("Delayed clear retained newer observation");step=6;clear(newSample)
+            case 6:finish(body["ok"] as? Bool==true && pages==baseline)
+            default:finish(false)
+            }
+        }
+        engine.onState={state in
+            guard !armed,state.connected,ble ? state.bleConnected:state.wifiConnected else{return}
+            armed=true;engine.work.async {guard engine.quotaCapable else{finish(false);return};send(["type":"quota.get"])}
+        }
+        clock.schedule(deadline:.now(),repeating:1)
+        clock.setEventHandler {if Date()>=deadline{engine.work.async{finish(false)}}}
+        clock.resume();engine.start();dispatchMain()
     }
 }

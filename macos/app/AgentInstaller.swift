@@ -3,6 +3,7 @@ import Darwin
 
 struct AgentIntegration:Identifiable {
     let agent:AgentID,executable:URL?,application:URL?,installed:Bool
+    var quotaReady=true
     var id:String { agent.rawValue }
     var detected:Bool { executable != nil || application != nil }
 }
@@ -31,6 +32,7 @@ enum AgentInstaller {
             let commented=base.appendingPathComponent("opencode.jsonc")
             return FileManager.default.fileExists(atPath:commented.path) ? commented : base.appendingPathComponent("opencode.json")
         case .dsh:return PairingStore.directory.appendingPathComponent("agents/dsh/package.json")
+        default:return PairingStore.directory.appendingPathComponent("agents/custom.json")
         }
     }
     static func executable(_ names:[String])->URL? {
@@ -48,7 +50,7 @@ enum AgentInstaller {
             let cli=executable([id == .claude ? "claude" : id.rawValue])
             let content=(try? String(contentsOf:config(id),encoding:.utf8)) ?? ""
             let installed=id == .opencode ? content.contains("vibe-companion-opencode") : id == .dsh ? false : content.contains(marker+" "+id.rawValue)
-            return AgentIntegration(agent:id,executable:cli,application:app,installed:installed)
+            return AgentIntegration(agent:id,executable:cli,application:app,installed:installed,quotaReady:id != .claude || content.contains(AgentQuotaHook.flag))
         }
     }
     static func privateWrite(_ data:Data,to file:URL,backup:Bool=true)throws {
@@ -86,6 +88,7 @@ enum AgentInstaller {
         default:return ["PermissionRequest","Stop","PreToolUse"]
         }
     }
+    static func quotaEvents(_ agent:AgentID)->[String] { [.codex,.claude].contains(agent) ? ["UserPromptSubmit","SessionEnd"] : [] }
     static func codexStatus(_ event:String)->String {
         switch event {
         case "Stop":return "Vibe 伴侣 · 完成提醒"
@@ -106,7 +109,7 @@ enum AgentInstaller {
             let valid:Set<String>=["SessionStart","UserPromptSubmit","PreToolUse","PermissionRequest","PostToolUse","PostToolUseFailure","Stop"]
             guard Set(hooks.keys).subtracting(["events","enabled"]).isEmpty,Set(entries.keys).isSubset(of:valid) else { throw AgentInstallError(text:"ZCode 的 hooks 格式不兼容，原配置未修改") }
         }
-        for event in Set(entries.keys).union(events(agent)) {
+        for event in Set(entries.keys).union(events(agent)+quotaEvents(agent)) {
             guard entries[event]==nil || entries[event] is [[String:Any]] else { throw AgentInstallError(text:"hooks."+event+" 不是数组，原配置未修改") }
             var groups=entries[event] as? [[String:Any]] ?? []
             groups=groups.compactMap { group in
@@ -114,10 +117,10 @@ enum AgentInstaller {
                 let kept=handlers.filter{!(($0["command"] as? String ?? "").contains(marker+" "+agent.rawValue+" "))}
                 if kept.isEmpty { return nil };var copy=group;copy["hooks"]=kept;return copy
             }
-            if install,events(agent).contains(event) {
+            if install,(events(agent)+quotaEvents(agent)).contains(event) {
                 var handler:[String:Any]=["type":"command","command":command(agent,event)]
                 if agent != .zcode { handler["timeout"]=(agent == .gemini || agent == .qwen) ? 2000 : 2 }
-                if agent == .codex { handler["statusMessage"]=codexStatus(event) }
+                if agent == .codex,events(agent).contains(event) { handler["statusMessage"]=codexStatus(event) }
                 if agent == .gemini { handler["name"]="vibe-companion-"+event }
                 var group:[String:Any]=["hooks":[handler]]
                 if event=="PreToolUse" { group["matcher"]="^(AskUserQuestion|ExitPlanMode|request_user_input|request_user_input_async|ask_user_question|exit_plan_mode)$" }
@@ -176,6 +179,7 @@ enum AgentInstaller {
             plugins.removeAll { ($0 as? String)==target.path || ($0 as? [String:Any])?["package"] as? String==target.path }
             if install { plugins.append(target.path) };root["plugins"]=plugins
         } else { root=try merged(root,agent:row.agent,install:install) }
+        if row.agent == .claude { root=try AgentQuotaHook.configure(root,install:install) }
         var toml:URL?,tomlData:Data?
         if row.agent == .codex,install {
             toml=file.deletingLastPathComponent().appendingPathComponent("config.toml")

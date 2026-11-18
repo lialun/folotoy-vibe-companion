@@ -167,3 +167,7 @@ suppression, fixed-queue expiry/deduplication, and existing audio lifecycle
 regressions. Complete real-session acceptance remains entry-point specific:
 trigger completion, approval and a supported question in each installed Agent,
 then verify wake, one chime, no duplicate and timely voice input on the toy.
+
+## Quotas and custom Agents
+
+The same integration controls provide [quota collection](quotas.md). **Connect your own Agent** prepares a copyable prompt for both alerts and quotas; see [the local callback contract](agents-custom.md).

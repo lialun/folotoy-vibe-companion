@@ -13,7 +13,7 @@ final class AgentReceiver {
     }
     private let endpointFile:URL
     init(endpoint:URL=AgentReceiver.endpoint) { endpointFile=endpoint }
-    func start(_ callback:@escaping(AgentEvent)->Void)throws {
+    func start(quota:((AgentQuotaSample)->Void)?=nil,activity:((AgentQuotaActivity)->Void)?=nil,_ callback:@escaping(AgentEvent)->Void)throws {
         let fd=Darwin.socket(AF_INET,SOCK_DGRAM,0)
         guard fd>=0 else { throw failure() }
         var address=sockaddr_in();address.sin_len=UInt8(MemoryLayout<sockaddr_in>.size);address.sin_family=sa_family_t(AF_INET);address.sin_addr.s_addr=inet_addr("127.0.0.1")
@@ -33,8 +33,10 @@ final class AgentReceiver {
             for _ in 0..<32 {
                 let count=Darwin.recv(fd,&bytes,bytes.count,0);if count<=0 { break }
                 guard count<=4096,let body=try? JSONSerialization.jsonObject(with:Data(bytes.prefix(count))) as? [String:Any],body["token"] as? String==token,
-                      let object=body["event"],let data=try? JSONSerialization.data(withJSONObject:object),let event=try? JSONDecoder().decode(AgentEvent.self,from:data) else { continue }
-                DispatchQueue.main.async { callback(event) }
+                      true else { continue }
+                if let object=body["event"],let data=try? JSONSerialization.data(withJSONObject:object),let event=try? JSONDecoder().decode(AgentEvent.self,from:data) { DispatchQueue.main.async { callback(event) } }
+                if let object=body["quota"],let data=try? JSONSerialization.data(withJSONObject:object),let sample=try? JSONDecoder().decode(AgentQuotaSample.self,from:data) { DispatchQueue.main.async { quota?(sample) } }
+                if let object=body["activity"],let data=try? JSONSerialization.data(withJSONObject:object),let signal=try? JSONDecoder().decode(AgentQuotaActivity.self,from:data) { DispatchQueue.main.async { activity?(signal) } }
             }
         }
         read.setCancelHandler{Darwin.close(fd)};source=read;read.resume()
@@ -45,8 +47,12 @@ final class AgentReceiver {
         if let data=try? Data(contentsOf:endpointFile),let body=try? JSONSerialization.jsonObject(with:data) as? [String:Any],body["token"] as? String==nonce { try? FileManager.default.removeItem(at:endpointFile) }
     }
     static func forward(_ event:AgentEvent,endpoint:URL=endpoint)->Bool {
+        guard let object=try? JSONSerialization.jsonObject(with:JSONEncoder().encode(event)) else{return false}
+        return forwardMessage(["event":object],endpoint:endpoint)
+    }
+    static func forwardMessage(_ message:[String:Any],endpoint:URL=endpoint)->Bool {
         guard let data=try? Data(contentsOf:endpoint),let body=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let port=body["port"] as? Int,(1...65535).contains(port),let token=body["token"] as? String,token.count==64,
-              let object=try? JSONSerialization.jsonObject(with:JSONEncoder().encode(event)),let packet=try? JSONSerialization.data(withJSONObject:["token":token,"event":object]),packet.count<=4096 else { return false }
+              let packet=try? JSONSerialization.data(withJSONObject:message.merging(["token":token]){_,b in b}),packet.count<=4096 else { return false }
         let fd=Darwin.socket(AF_INET,SOCK_DGRAM,0);guard fd>=0 else { return false };defer{Darwin.close(fd)}
         var address=sockaddr_in();address.sin_len=UInt8(MemoryLayout<sockaddr_in>.size);address.sin_family=sa_family_t(AF_INET);address.sin_addr.s_addr=inet_addr("127.0.0.1");address.sin_port=UInt16(port).bigEndian
         return packet.withUnsafeBytes { bytes in withUnsafePointer(to:&address){$0.withMemoryRebound(to:sockaddr.self,capacity:1){sendto(fd,bytes.baseAddress,bytes.count,0,$0,socklen_t(MemoryLayout<sockaddr_in>.size))}} }==packet.count
@@ -64,7 +70,12 @@ final class AgentReceiver {
             let count=Darwin.read(STDIN_FILENO,&buffer,buffer.count)
             if count==0 { break };if count<0 { return };data.append(contentsOf:buffer.prefix(count))
         }
-        guard data.count<=262144,let payload=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let event=AgentEvent.parse(agent:agent,event:args.count>1 ? args[1] : "",payload:payload) else { return }
-        _=forward(event)
+        guard data.count<=262144,let payload=try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return }
+        let name=args.count>1 ? args[1] : ""
+        if [.codex,.claude].contains(agent),["UserPromptSubmit","Stop","SessionEnd"].contains(name),let session=payload["session_id"] as? String {
+            let signal=AgentQuotaActivity(agent:agent,session:AgentEvent.digest(session),active:name=="UserPromptSubmit")
+            if let object=try? JSONSerialization.jsonObject(with:JSONEncoder().encode(signal)) {_=forwardMessage(["activity":object])}
+        }
+        if let event=AgentEvent.parse(agent:agent,event:name,payload:payload) {_=forward(event)}
     }
 }

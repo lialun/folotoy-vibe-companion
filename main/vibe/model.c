@@ -7,6 +7,7 @@ void vibe_model_init(vibe_model_t *m, uint64_t now) {
     m->brightness=50; m->volume=80; m->screen_seconds=15;
     m->theme_mode=V_THEME_SCHEDULED;
     m->radio_count=6;
+    m->info_pages=4;m->info_rotated_ms=now;
     m->last_activity_ms=now; m->remaining_ms=25*60000ULL;
 }
 bool vibe_model_connection_page(vibe_page_t page) { return page==V_CONNECT_GUIDE || page==V_COMPUTER_GUIDE; }
@@ -71,6 +72,10 @@ unsigned vibe_model_wait_ms(const vibe_model_t *m, uint64_t now) {
 }
 unsigned vibe_model_tick(vibe_model_t *m, uint64_t now) {
     unsigned actions=0;
+    if(m->page!=V_HOME || !m->screen_on || m->recording || m->timer!=V_TIMER_READY || m->radio_active || m->info_blocked) m->info_rotated_ms=now;
+    else if(m->info_pages && now>=(m->info_rotated_ms>m->last_activity_ms?m->info_rotated_ms:m->last_activity_ms)+8000) {
+        m->weather_page=(m->weather_page+1)%m->info_pages;m->info_rotated_ms=now;
+    }
     if (m->timer == V_TIMER_RUNNING && now >= m->deadline_ms) {
         m->timer=V_TIMER_FINISHED;
         m->completion_until_ms=now+10000;
@@ -154,7 +159,7 @@ unsigned vibe_model_key(vibe_model_t *m, vibe_key_t key, vibe_event_t event, uin
             }
             if (m->timer==V_TIMER_RUNNING) { m->remaining_ms=vibe_model_remaining(m,now);m->timer=V_TIMER_PAUSED; }
             else if (m->timer!=V_TIMER_READY) start_phase(m,now);
-            else { m->weather_page=(m->weather_page+1)%4; }
+            else { m->weather_page=(m->weather_page+1)%(m->info_pages?m->info_pages:1);m->info_rotated_ms=now; }
         }
         if (key == V_DOWN && event == V_CLICK && m->enter_ready) return V_ENTER;
         if (key == V_DOWN && event == V_LONG) {

@@ -8,6 +8,8 @@ covers the device; [Mac installation](install.md) covers the companion and
 
 See [Device connections](connections.md) for LAN/BLE pairing and switching computers.
 
+See [Agent quotas](quotas.md) for automatic quota cards and [Custom Agents](agents-custom.md) for local notification and quota callbacks.
+
 ## First setup
 
 ### Install firmware

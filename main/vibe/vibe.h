@@ -7,6 +7,7 @@
 #include "messages.h"
 #include "connection_request.h"
 #include "agent_alert.h"
+#include "quota.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -28,6 +29,8 @@ typedef struct {
     int rssi, battery, tz_minutes;
     vibe_signal_t signal;
     vibe_agent_alert_t agent_alert;
+    vibe_quota_card_t quota;
+    unsigned quota_pages,quota_part,quota_parts;
     vibe_appearance_t appearance;
     unsigned drops;
     uint32_t settings_revision;
@@ -39,6 +42,7 @@ typedef struct {
 extern vibe_model_t v_model;
 extern vibe_prefs_t v_prefs;
 extern vibe_status_t v_status;
+extern vibe_quota_store_t v_quotas;
 extern SemaphoreHandle_t v_mutex;
 extern QueueHandle_t v_queue;
 uint64_t vibe_now(void);

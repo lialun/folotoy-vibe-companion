@@ -65,6 +65,7 @@ final class AppModel: ObservableObject {
         if !preview { _=Shortcut.permitted }
         agents=AgentCenter(preview:preview)
         engine=Engine(preview:preview)
+        agents.deliverQuota={ [weak self] samples in self?.engine.updateAgentQuotas(samples) }
         agents.deliver={ [weak self] event in self?.engine.notifyAgent(event) }
         engine.onAgentResult={ [weak self] message in self?.agents.message=message }
         if !preview {

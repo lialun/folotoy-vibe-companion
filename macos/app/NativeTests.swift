@@ -4,6 +4,8 @@ enum NativeTests {
     static func run() {
         if CommandLine.arguments.contains("--agent-tests") { AgentTests.run();return }
         func check(_ yes:Bool,_ description:String) { if !yes { fputs("FAIL: \(description)\n",stderr);exit(1) } }
+        AgentQuotaTests.run(check)
+        AgentBridgeTests.run(check)
         WeatherTests.run(check)
         RadioTests.run(check)
         LANTests.run(check)

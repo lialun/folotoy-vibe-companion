@@ -90,6 +90,15 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
 
 @main struct VibeMain {
     static func main() {
+        if CommandLine.arguments.contains("--notify") {AgentBridge.run(quota:false);return}
+        if CommandLine.arguments.contains("--quota") {AgentBridge.run(quota:true);return}
+        if let i=CommandLine.arguments.firstIndex(of:"--vibe-quota-hook"),CommandLine.arguments.count>i+1,CommandLine.arguments[i+1]=="opencode" {AgentBridge.run(quota:true,builtin:.opencode);return}
+        if CommandLine.arguments.contains("--vibe-quota-statusline") { AgentQuotaHook.run();return }
+        if CommandLine.arguments.contains("--agent-quota-probe") {
+            guard let executable=AgentInstaller.executable(["codex"]),let sample=try? CodexQuotaProbe.read(executable:executable) else { print("unavailable");exit(1) }
+            let report:[String:Any]=["agent":sample.agent.rawValue,"items":sample.items.map{["label":$0.title,"remaining":$0.remaining,"minutes":$0.minutes]}]
+            if let data=try? JSONSerialization.data(withJSONObject:report,options:.sortedKeys) { print(String(decoding:data,as:UTF8.self)) };return
+        }
         if let i=CommandLine.arguments.firstIndex(of:AgentInstaller.marker) { AgentReceiver.runHook(Array(CommandLine.arguments.dropFirst(i+1)));return }
         if let i=CommandLine.arguments.firstIndex(of:"--relaunch-permission"),CommandLine.arguments.count>i+2 {
             exit(PermissionRelaunch.run(parent:CommandLine.arguments[i+1],resumeID:CommandLine.arguments[i+2]))
@@ -98,6 +107,7 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
         if let i=CommandLine.arguments.firstIndex(of:"--radio-stream-tests"),i+1<CommandLine.arguments.count,let url=URL(string:CommandLine.arguments[i+1]) { exit(RadioTests.streaming(base:url)) }
         if CommandLine.arguments.contains("--self-test") { NativeTests.run();return }
         if CommandLine.arguments.contains("--ble-device-test") { exit(HardwareConnectionTests.runBLE()) }
+        if CommandLine.arguments.contains("--quota-device-test") { exit(Engine.runQuotaDeviceTest(ble:CommandLine.arguments.contains("--ble-only"))) }
         let app=NSApplication.shared;let delegate=AppDelegate();app.delegate=delegate
         app.setActivationPolicy(.accessory);app.run();withExtendedLifetime(delegate){}
     }

@@ -115,3 +115,5 @@ application must not schedule automatic merges over application work.
 Regenerate the README images with `bash tools/render_readme.sh` on a Mac with
 managed components resolved. The tool renders production UI with sample data,
 without replacing the installed app or communicating with the device.
+
+Community listing copy is maintained in [community-copy.md](community-copy.md). The gallery uses the cover plus the portrait desktop, quota and connection images under `assets/brand/`. Publishing updates the existing FoloToy play 2174 and requires a current scoped authorization.

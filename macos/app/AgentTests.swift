@@ -27,7 +27,7 @@ enum AgentTests {
         })
         let migrated=try! AgentInstaller.merged(["hooks":legacyHooks,"description":"Existing description"],agent:.codex,install:true)
         let migratedHooks=migrated["hooks"] as! [String:Any]
-        check(Set(migratedHooks.keys)==Set(AgentInstaller.events(.codex)),"legacy lifecycle hooks removed during reinstall")
+        check(Set(migratedHooks.keys)==Set(AgentInstaller.events(.codex)+AgentInstaller.quotaEvents(.codex)),"legacy lifecycle hooks removed during reinstall")
         check(migrated["description"] as? String=="Existing description","existing file description preserved")
         for event in AgentInstaller.events(.codex) {
             let groups=migratedHooks[event] as! [[String:Any]],handlers=groups[0]["hooks"] as! [[String:Any]]
@@ -39,7 +39,7 @@ enum AgentTests {
             let source:[String:Any]=id == .zcode ? ["hooks":["enabled":true,"events":entries]] : ["hooks":entries]
             let cleaned=try! AgentInstaller.merged(source,agent:id,install:true)["hooks"] as! [String:Any]
             let callbacks=id == .zcode ? cleaned["events"] as! [String:Any] : cleaned
-            check(Set(callbacks.keys)==Set(AgentInstaller.events(id)),"old silent hooks removed for "+id.rawValue)
+            check(Set(callbacks.keys)==Set(AgentInstaller.events(id)+AgentInstaller.quotaEvents(id)),"old silent hooks removed for "+id.rawValue)
         }
         for event in ["SessionStart","UserPromptSubmit","BeforeAgent","PostToolUse","SessionEnd","Interrupt","started","resolved"] {
             check(AgentEvent.parse(agent:.codex,event:event,payload:payload)==nil,"ignore obsolete lifecycle callback "+event)
@@ -142,6 +142,25 @@ enum AgentTests {
         let deadline=Date().addingTimeInterval(2)
         while secondCount==0 && Date()<deadline { RunLoop.current.run(until:Date().addingTimeInterval(0.01)) }
         check(secondCount==1 && firstCount==0,"helper rereads new endpoint after port change")
+        var customEvents:[AgentEvent]=[],customQuotas:[AgentQuotaSample]=[]
+        let publicEndpoint=file.appendingPathExtension("public-endpoint")
+        let custom=AgentReceiver(endpoint:publicEndpoint)
+        try! custom.start(quota:{customQuotas.append($0)}) {customEvents.append($0)}
+        defer{try? FileManager.default.removeItem(at:publicEndpoint)}
+        func publicCall(_ flag:String,_ body:[String:Any]) {
+            let child=Process();child.executableURL=Bundle.main.executableURL;child.arguments=[flag]
+            var env=ProcessInfo.processInfo.environment;env["VIBE_AGENT_ENDPOINT"]=publicEndpoint.path;child.environment=env
+            let input=Pipe(),output=Pipe();child.standardInput=input;child.standardOutput=output
+            try! child.run();input.fileHandleForWriting.write(try! JSONSerialization.data(withJSONObject:body));try! input.fileHandleForWriting.close();child.waitUntilExit()
+            check(child.terminationStatus==0 && String(decoding:output.fileHandleForReading.readDataToEndOfFile(),as:UTF8.self).trimmingCharacters(in:.whitespacesAndNewlines)=="{}","public helper remains fail open")
+        }
+        publicCall("--notify",["schema":1,"source":"test-company","name":"Company Agent","event":"approval","session_id":"s","event_id":"r1"])
+        publicCall("--quota",["schema":1,"source":"test-company","name":"Company Agent","sample_id":"p1","observed_at":Date().timeIntervalSince1970,"items":[["label":"Weekly","remaining":42.5,"window_minutes":10080]]])
+        let publicDeadline=Date().addingTimeInterval(2)
+        while (customEvents.isEmpty || customQuotas.isEmpty) && Date()<publicDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.01))}
+        check(customEvents.first?.displayTitle=="Company Agent" && customEvents.first?.kind == .approval,"public notification helper IPC round trip")
+        check(customQuotas.first?.items.first?.remaining==42.5 && customQuotas.first?.agent==customEvents.first?.agent,"public quota helper round trip shares opaque source identity")
+        withExtendedLifetime(custom){}
         withExtendedLifetime((first,second)){}
         print("Agent host tests: PASS (seven mappings, config merge/uninstall, real helper, dynamic IPC port)")
     }

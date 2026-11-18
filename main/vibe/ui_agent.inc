@@ -1,6 +1,7 @@
 /* Compact, non-modal notice drawn after the existing page. No child objects,
  * image/snapshot buffers, independent timer or borrowed audio memory. */
 static unsigned agent_popup_state;
+static char agent_popup_name[33];
 static const lv_area_t agent_popup_area={8,118,211,197};
 typedef struct {
     uint32_t panel,edge,ink,muted,tone[4],fill[4];
@@ -17,7 +18,7 @@ static const agent_popup_palette_t agent_popup_light={
 };
 static void agent_popup_draw(lv_event_t *event) {
     if (!agent_popup_state) return;
-    unsigned agent=(agent_popup_state>>4)&7,kind=(agent_popup_state>>1)&3;
+    unsigned kind=(agent_popup_state>>1)&3;
     const agent_popup_palette_t *colors=palette==&light_palette?&agent_popup_light:&agent_popup_dark;
     lv_layer_t *layer=lv_event_get_layer(event);
     lv_draw_rect_dsc_t rect;lv_draw_rect_dsc_init(&rect);
@@ -32,7 +33,14 @@ static void agent_popup_draw(lv_event_t *event) {
     text.font=&lv_font_montserrat_20;text.text=symbols[kind];text.text_static=1;
     text.color=lv_color_hex(colors->tone[kind]);text.align=LV_TEXT_ALIGN_CENTER;
     const lv_area_t symbol={21,146,52,171};lv_draw_label(layer,&text,&symbol);
-    text.font=&numbers16;text.text=vibe_agent_name(agent);text.color=lv_color_hex(colors->muted);
+    char fitted[33];snprintf(fitted,sizeof(fitted),"%s",agent_popup_name);
+    lv_point_t extent;lv_text_get_size(&extent,fitted,&numbers16,0,0,LV_COORD_MAX,LV_TEXT_FLAG_NONE);
+    size_t length=strlen(fitted);
+    while(extent.x>133 && length>3) {
+        fitted[--length]=0;memcpy(fitted+length-3,"...",3);
+        lv_text_get_size(&extent,fitted,&numbers16,0,0,LV_COORD_MAX,LV_TEXT_FLAG_NONE);
+    }
+    text.font=&numbers16;text.text=fitted;text.text_static=0;text.color=lv_color_hex(colors->muted);
     text.align=LV_TEXT_ALIGN_LEFT;
     const lv_area_t source={64,129,197,150};lv_draw_label(layer,&text,&source);
     text.font=&body;text.text=vibe_agent_action(kind);text.color=lv_color_hex(colors->ink);text.letter_space=-1;
@@ -41,7 +49,9 @@ static void agent_popup_draw(lv_event_t *event) {
 static void agent_popup_refresh(const vibe_model_t *m,const vibe_status_t *s) {
     unsigned next=s->agent_alert.visible && !m->recording && m->page!=V_PROVISION
         ? 1U|((unsigned)s->agent_alert.active.kind<<1)|((unsigned)s->agent_alert.active.agent<<4) : 0;
-    if (agent_popup_state!=next) {
+    const char *name=s->agent_alert.active.agent==7?s->agent_alert.active.name:vibe_agent_name(s->agent_alert.active.agent);
+    if (agent_popup_state!=next || (next && strcmp(agent_popup_name,name))) {
+        snprintf(agent_popup_name,sizeof(agent_popup_name),"%s",name);
         agent_popup_state=next;
         lv_obj_invalidate_area(screen,&agent_popup_area);
     }

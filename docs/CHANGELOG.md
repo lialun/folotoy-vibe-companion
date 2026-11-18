@@ -12,6 +12,13 @@
 
 ## Unreleased
 
+## v0.9.0 - 2026-11-18
+
+- Add automatic remaining-quota cards for Codex, Claude Code and OpenCode Go using existing Agent logins. Collect during recent activity; hide unavailable or stale observations without interrupting the user.
+- Place quota cards before the four weather pages with one consistent page counter. Show three independent percentage windows together when available, including Go’s five-hour, weekly and monthly allowances.
+- Add **Connect your own Agent** in the desktop app, with a copyable prompt for both local task alerts and quota callbacks. Custom sources keep their own names and support percentage windows or independent monetary balances.
+- Improve Bluetooth data delivery by keeping unrelated subscription changes from disabling the application notification channel.
+
 ## v0.8.4 - 2026-11-17
 
 - Connect over Bluetooth or Wi-Fi with the same voice, Enter, reminders and radio features. Bluetooth supports offices where the device cannot join the network.

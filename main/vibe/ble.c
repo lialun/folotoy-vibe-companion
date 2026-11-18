@@ -137,9 +137,9 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
         ESP_LOGI("vibe_ble","Encryption handle=%u status=%d secure=%d",(unsigned)event->enc_change.conn_handle,event->enc_change.status,secure(event->enc_change.conn_handle));break;
     case BLE_GAP_EVENT_SUBSCRIBE: {
         xSemaphoreTake(links_mutex,portMAX_DELAY);
-        vibe_ble_link_subscription(&registry,event->subscribe.conn_handle,event->subscribe.cur_notify);
+        vibe_ble_link_subscription(&registry,event->subscribe.conn_handle,event->subscribe.attr_handle,tx_handle,event->subscribe.cur_notify);
         xSemaphoreGive(links_mutex);
-        ESP_LOGI("vibe_ble","Notify subscription handle=%u active=%u",(unsigned)event->subscribe.conn_handle,(unsigned)event->subscribe.cur_notify);break;
+        ESP_LOGI("vibe_ble","Notify subscription handle=%u attr=%u tx=%u active=%u",(unsigned)event->subscribe.conn_handle,(unsigned)event->subscribe.attr_handle,(unsigned)tx_handle,(unsigned)event->subscribe.cur_notify);break;
     }
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
         /* The app-level credential and physical confirmation authorize control.

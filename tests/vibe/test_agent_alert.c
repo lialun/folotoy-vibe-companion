@@ -4,7 +4,7 @@
 #include <string.h>
 int main(void) {
     vibe_agent_alert_t s={0};
-    assert(sizeof(s)<=320);
+    assert(sizeof(s)<=560);
     assert(!vibe_agent_push(&s,0,0,0,0,10000));
     assert(!vibe_agent_push(&s,1,7,0,0,10000));
     assert(!vibe_agent_push(&s,1,0,4,0,10000));
@@ -46,5 +46,13 @@ int main(void) {
     assert(!vibe_agent_tick(&deferred,10000,true) && !deferred.count);
     assert(!strcmp(vibe_agent_name(3),"DSH"));
     assert(vibe_agent_hash("a")==vibe_agent_hash("a") && vibe_agent_hash("a")!=vibe_agent_hash("b"));
+    vibe_agent_alert_t custom={0};
+    assert(!vibe_agent_push_named(&custom,200,7,0,NULL,0,10000));
+    assert(!vibe_agent_push_named(&custom,200,7,0,"Invalid\nName",0,10000));
+    assert(!vibe_agent_push_named(&custom,200,7,0,"ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567",0,10000));
+    assert(vibe_agent_push_named(&custom,200,7,1,"Company Agent",0,10000));
+    assert(vibe_agent_tick(&custom,0,false) && !strcmp(custom.active.name,"Company Agent"));
+    assert(vibe_agent_push_named(&custom,200,7,1,"Changed Name",100,10000) && !custom.count);
+    assert(vibe_agent_dismiss(&custom));
     printf("Agent fixed queue: PASS (%zu resident bytes)\n",sizeof(s));
 }

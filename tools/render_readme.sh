@@ -16,12 +16,12 @@ mkdir -p "${work}/frames" assets/brand
 cmake -S tools/vibe_preview -B "${work}/preview" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${work}/preview" --parallel 4
 "${work}/preview/preview" "${work}/frames"
-xcrun swift tools/render_readme.swift "${work}/frames" assets/brand
 sources=()
 for path in macos/app/*.swift; do
     [[ "${path}" == macos/app/App.swift ]] || sources+=("${path}")
 done
-xcrun swiftc -swift-version 5 -O -parse-as-library \
+xcrun swiftc -swift-version 5 -whole-module-optimization -O -parse-as-library \
     -target "$(uname -m)-apple-macos13.0" \
     "${sources[@]}" tools/readme_snapshot.swift -o "${work}/snapshot"
-"${work}/snapshot" assets/brand
+"${work}/snapshot" "${work}/frames"
+xcrun swift tools/render_readme.swift "${root}" assets/brand

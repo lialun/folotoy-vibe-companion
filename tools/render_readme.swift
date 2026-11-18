@@ -119,175 +119,185 @@ func symbol(_ name: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFl
                operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
 }
 
-// High-resolution illustrations of the existing weather/focus/radio/notice
-// states. Native fonts and vector marks avoid upscaling the LCD's bitmap glyphs.
-// These are explicitly labelled illustrations, not firmware screenshots.
-func illustratedFrame(_ kind: String, light: Bool = false) throws -> NSImage {
-    let bg: UInt32 = light ? 0xC6C1AD : 0x14232E
-    let ink: UInt32 = light ? 0x1B2529 : 0xF0EBDD
-    let muted: UInt32 = light ? 0x3F4B50 : 0xA8BBC2
-    let accent: UInt32 = light ? 0x00765D : 0x51DFC4
-    let warm: UInt32 = light ? 0x936100 : 0xF2CB73
-    let focus: UInt32 = 0xFFB47D
-    let enter: UInt32 = light ? 0x0965AD : 0x8CC9FA
-    let exit: UInt32 = light ? 0xB54716 : focus
-    let bitmap = try raster(width: 240, height: 320, scale: 4) {
-        color(bg).setFill(); NSRect(x: 0, y: 0, width: 240, height: 320).fill()
-        func label(_ value: String, _ x: CGFloat, _ y: CGFloat, _ size: CGFloat,
-                   _ tint: UInt32, width: CGFloat = 210, weight: NSFont.Weight = .regular) {
-            text(value, x: x, y: y, width: width, size: size, weight: weight, ink: tint)
-        }
-        for i in 0..<3 {
-            let height = CGFloat(4 + i * 3)
-            rounded(NSRect(x: 18 + CGFloat(i * 5), y: 23 - height, width: 3, height: height), radius: 1, fill: accent)
-        }
-        label("11/08 16:08", 39, 6, 14, ink, width: 108)
-        label("72%", 176, 6, 14, ink, width: 31)
-        symbol("battery.75percent", x: 208, y: 10, width: 16, height: 9, ink: ink)
-        for (i, h) in [10.0, 18, 26, 18, 10].enumerated() {
-            rounded(NSRect(x: 13 + CGFloat(i) * 4, y: 53 - h / 2, width: 2.5, height: h), radius: 1.25, fill: accent)
-        }
-        label("语音输入就绪", 51, 40, 19, accent, width: 165)
-        rounded(NSRect(x: 223, y: 24, width: 10, height: 1.5), radius: 0.7, fill: accent)
-        label("语", 222, 30, 14, accent, width: 16)
-        label("音", 222, 45, 14, accent, width: 16)
-        rounded(NSRect(x: 227, y: 129, width: 2, height: 2), radius: 0, fill: enter)
-        label("回", 222, 135, 14, enter, width: 16)
-        label("车", 222, 150, 14, enter, width: 16)
-        rounded(NSRect(x: 223, y: 175, width: 10, height: 1.5), radius: 0.7, fill: exit)
-        symbol(kind == "weather" || kind == "alert" ? "stopwatch" : "rectangle.portrait.and.arrow.right",
-               x: 222, y: 182, width: 14, height: 16, ink: exit)
-        rounded(NSRect(x: 223, y: 237, width: 10, height: 1.5), radius: 0.7, fill: muted)
-        symbol("gearshape.fill", x: 222, y: 244, width: 14, height: 14, ink: muted)
-        rounded(NSRect(x: 227, y: 266, width: 2, height: 2), radius: 0, fill: muted)
-        let action = kind == "focus" ? ["暂", "停"] : kind == "radio" ? ["换", "台"] : ["翻", "页"]
-        label(action[0], 222, 273, 14, kind == "focus" || kind == "radio" ? warm : muted, width: 16)
-        label(action[1], 222, 288, 14, kind == "focus" || kind == "radio" ? warm : muted, width: 16)
-        if kind == "focus" {
-            label("正在专注 · 第1轮", 8, 84, 19, focus)
-            label("24:32", 8, 111, 48, focus, weight: .light)
-            rounded(NSRect(x: 8, y: 186, width: 204, height: 2), radius: 0, fill: 0x405867)
-            rounded(NSRect(x: 8, y: 186, width: 3, height: 2), radius: 0, fill: focus)
-            label("专注 25 分钟 → 休息", 8, 204, 16, muted)
-            label("已完成 0 轮", 8, 272, 16, muted)
-        } else if kind == "radio" {
-            label("收音机", 12, 84, 20, ink)
-            label("01 / 06", 158, 90, 15, muted, width: 60)
-            for i in 0..<25 {
-                rounded(NSRect(x: 12 + CGFloat(i) * 8, y: i == 12 ? 120 : 129,
-                               width: 1, height: i == 12 ? 22 : (i % 2 == 0 ? 7 : 4)),
-                        radius: 0, fill: i == 12 ? warm : 0x405867)
-            }
-            label("怀旧音乐", 72, 163, 20, ink, width: 137)
-            label("正在播放", 77, 216, 16, warm, width: 125)
-            label("下一台", 12, 250, 16, muted)
-            label("清晨音乐", 12, 274, 16, ink)
-        } else {
-            label("北京 · 多云", 8, 84, 20, ink, width: 165)
-            label("1/4", 185, 90, 14, muted, width: 31)
-            label("16°", 8, 112, 36, light ? ink : warm, width: 110)
-            symbol("cloud.sun", x: 164, y: 109, width: 43, height: 43, ink: warm)
-            label("9° / 18°", 8, 165, 20, ink, width: 115)
-            label("雨 20%", 151, 170, 14, muted, width: 65)
-            label("体感", 8, 202, 16, muted, width: 100)
-            label("湿度", 113, 202, 16, muted, width: 100)
-            label("14°", 8, 225, 20, ink, width: 100)
-            label("62%", 113, 225, 20, ink, width: 100)
-            label("UV 今日最高", 8, 269, 14, muted, width: 102)
-            label("5.0 · 中等", 115, 266, 18, warm, width: 102)
-            label("0 分钟前更新", 8, 293, 14, muted)
-            if kind == "alert" {
-                rounded(NSRect(x: 8, y: 118, width: 204, height: 80), radius: 12, fill: 0x263E48, stroke: 0x435B65)
-                rounded(NSRect(x: 21, y: 142, width: 32, height: 32), radius: 10, fill: 0x304C61)
-                symbol("keyboard", x: 25, y: 150, width: 24, height: 16, ink: 0x9BC6EB)
-                label("OpenCode", 64, 128, 16, 0xB4C3C5, width: 134)
-                label("等待回答", 64, 153, 20, ink, width: 138)
-            }
+let root = URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
+let dest = URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true)
+try FileManager.default.createDirectory(at:dest,withIntermediateDirectories:true)
+let paper:UInt32=0xEFF6EC, ink:UInt32=0x142B21, green:UInt32=0x237A48, muted:UInt32=0x52685A
+func background(_ w:CGFloat,_ h:CGFloat) {
+    color(paper).setFill();NSRect(x:0,y:0,width:w,height:h).fill()
+    color(0xD5EDCD).setFill();NSBezierPath(ovalIn:NSRect(x:w*0.70,y:-h*0.3,width:w*0.8,height:w*0.8)).fill()
+}
+func brand(_ x:CGFloat,_ y:CGFloat,_ size:CGFloat) {
+    mark(x:x,y:y,size:size)
+    text("Vibe 伴侣",x:x+size+22,y:y-2,width:700,size:size*0.80,weight:.semibold,ink:ink)
+}
+func card(_ rect:NSRect,_ name:String,_ dual:Bool=false) {
+    NSGraphicsContext.saveGraphicsState()
+    let tr=NSAffineTransform();tr.translateX(by:rect.minX,yBy:rect.minY);tr.scaleX(by:rect.width/1000,yBy:rect.height/660);tr.concat()
+    let shadow=NSShadow();shadow.shadowColor=NSColor.black.withAlphaComponent(0.14);shadow.shadowBlurRadius=30;shadow.shadowOffset=NSSize(width:0,height:12);shadow.set()
+    rounded(NSRect(x:0,y:0,width:1000,height:660),radius:54,fill:0x14232E)
+    NSShadow().set()
+    text(name,x:56,y:43,width:888,size:64,weight:.medium,ink:0xF0EBDD)
+    if !dual {
+        text("每周剩余",x:59,y:155,width:700,size:44,ink:0xB7C9CB)
+        text("47%",x:49,y:224,width:890,size:194,weight:.medium,ink:0xF0EBDD)
+        rounded(NSRect(x:60,y:503,width:880,height:18),radius:9,fill:0x304953)
+        rounded(NSRect(x:60,y:503,width:414,height:18),radius:9,fill:0x51DFC4)
+        text("3 天后重置",x:59,y:558,width:880,size:42,ink:0xB7C9CB)
+    } else {
+        for (i,values) in [("5 小时","74.5%","2 小时 20 分后重置",0.745),("每周","32%","3 天后重置",0.32)].enumerated() {
+            let y=CGFloat(160+i*239)
+            text(values.0,x:60,y:y,width:400,size:44,ink:0xD6DFD7)
+            text(values.1,x:568,y:y-21,width:380,size:86,weight:.medium,ink:0xF0EBDD)
+            rounded(NSRect(x:60,y:y+94,width:880,height:15),radius:7,fill:0x304953)
+            rounded(NSRect(x:60,y:y+94,width:880*values.3,height:15),radius:7,fill:0x51DFC4)
+            text(values.2,x:60,y:y+130,width:880,size:35,ink:0xB7C9CB)
         }
     }
-    guard let cg = bitmap.cgImage else { throw ArtworkError.image }
-    return NSImage(cgImage: cg, size: NSSize(width: 240, height: 320))
+    NSGraphicsContext.restoreGraphicsState()
 }
-
-guard CommandLine.arguments.count == 3 else { throw ArtworkError.arguments }
-let frames = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-let output = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
-try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-let weather = try illustratedFrame("weather", light: true)
-let focus = try illustratedFrame("focus")
-let radio = try illustratedFrame("radio")
-let alert = try illustratedFrame("alert")
-
-try canvas(width: 1600, height: 880, output: output.appendingPathComponent("vibe-companion-hero.png")) {
-    let bounds = NSRect(x: 0, y: 0, width: 1600, height: 880)
-    NSGradient(starting: color(0x0b1d20), ending: color(0x142f2c))!.draw(in: bounds, angle: 0)
-    let orbit = NSBezierPath(ovalIn: NSRect(x: 805, y: 68, width: 690, height: 690))
-    orbit.lineWidth = 1; color(0x28473d).setStroke(); orbit.stroke()
-    let outer = NSBezierPath(ovalIn: NSRect(x: 710, y: -27, width: 880, height: 880))
-    outer.lineWidth = 1; color(0x203c36).setStroke(); outer.stroke()
-    mark(x: 84, y: 73, size: 53)
-    text("FOLOTOY", x: 157, y: 78, width: 420, size: 15, weight: .medium, ink: 0x9cb9ab, spacing: 3)
-    text("Vibe 伴侣", x: 157, y: 101, width: 470, size: 25, weight: .semibold)
-    text("语音输入、AI 提醒，\n你的 Vibe Coding 伴侣。", x: 78, y: 250, width: 710,
-         size: 66, weight: .semibold, ink: 0xf0f2e7, lineHeight: 90)
-    text("语音输入，随手可用。\nAI 需要你时，即刻提醒。", x: 84, y: 520, width: 650,
-         size: 25, ink: 0xb0c5ba, lineHeight: 37)
-    text("蓝牙 / Wi-Fi，都能连接。\n公司网络不便接入？用蓝牙直接连电脑。", x: 84, y: 650,
-         width: 650, size: 23, ink: 0xb3cdbd, lineHeight: 35)
-    device(weather, x: 782, y: 294, width: 270)
-    device(alert, x: 1120, y: 135, width: 340)
-    text("语音输入  /  Agent 提醒  /  番茄钟  /  天气  /  收音机",
-         x: 84, y: 791, width: 1430, size: 16, weight: .medium, ink: 0x91ad9d, spacing: 1)
+func goCard(_ rect:NSRect) {
+    NSGraphicsContext.saveGraphicsState()
+    let tr=NSAffineTransform();tr.translateX(by:rect.minX,yBy:rect.minY);tr.scaleX(by:rect.width/1000,yBy:rect.height/660);tr.concat()
+    rounded(NSRect(x:0,y:0,width:1000,height:660),radius:54,fill:0x14232E)
+    text("OpenCode Go",x:56,y:43,width:888,size:64,weight:.medium,ink:0xF0EBDD)
+    for (i,v) in [("5 小时","68%",0.68,"2 小时后重置"),("每周","47%",0.47,"3 天后重置"),("每月","12.3%",0.123,"12 天后重置")].enumerated() {
+        let y=CGFloat(148+i*163)
+        text(v.0,x:60,y:y,width:420,size:41,ink:0xD6DFD7)
+        text(v.1,x:602,y:y-12,width:340,size:67,weight:.medium,ink:0xF0EBDD)
+        rounded(NSRect(x:60,y:y+68,width:880,height:12),radius:6,fill:0x304953)
+        rounded(NSRect(x:60,y:y+68,width:880*v.2,height:12),radius:6,fill:0x51DFC4)
+        text(v.3,x:60,y:y+91,width:880,size:31,ink:0xB7C9CB)
+    }
+    NSGraphicsContext.restoreGraphicsState()
 }
-
-try canvas(width: 1600, height: 600, output: output.appendingPathComponent("vibe-companion-screens.png")) {
-    color(0x101f22).setFill(); NSRect(x: 0, y: 0, width: 1600, height: 600).fill()
-    let images = [weather, focus, radio, alert]
-    let labels = ["天气", "番茄钟", "收音机", "Agent 提醒"]
-    let notes = ["四页天气，按需翻看", "专注休息，自主开始", "自选电台，随心排序", "需要你时，亮屏提醒"]
-    for index in 0..<4 {
-        let x = CGFloat(index) * 388 + 68
-        text(String(format: "%02d", index + 1), x: x, y: 34, width: 65, size: 12,
-             weight: .medium, ink: 0x78998a, spacing: 2)
-        screen(images[index], in: NSRect(x: x, y: 79, width: 300, height: 400), radius: 19)
-        text(labels[index], x: x, y: 502, width: 310, size: 23, weight: .semibold)
-        text(notes[index], x: x, y: 540, width: 322, size: 15, ink: 0xa0b8aa)
+func pill(_ value:String,x:CGFloat,y:CGFloat,width:CGFloat,size:CGFloat=26) {
+    rounded(NSRect(x:x,y:y,width:width,height:size*2.0),radius:size,fill:0xD8ECCD)
+    text(value,x:x+size*0.8,y:y+size*0.35,width:width-size,size:size,weight:.medium,ink:green)
+}
+let lcd=try frame(root.appendingPathComponent(".work/readme/frames"),"quota-agent-dark-codex")
+guard let product=NSImage(contentsOf:root.appendingPathComponent("docs/brand/ai-passport-front.png")) else{throw ArtworkError.image}
+func officialDevice(x:CGFloat,y:CGFloat,width:CGFloat) {
+    let s=width/582
+    product.draw(in:NSRect(x:x,y:y,width:width,height:938*s),from:.zero,operation:.sourceOver,fraction:1,respectFlipped:true,hints:[.interpolation:NSImageInterpolation.high])
+    screen(lcd,in:NSRect(x:x+126*s,y:y+142*s,width:285*s,height:380*s),radius:28*s)
+}
+try canvas(width:1600,height:900,output:dest.appendingPathComponent("vibe-companion-hero.png"),scale:1) {
+    background(1600,900);brand(64,54,58)
+    text("语音输入\n额度管理",x:64,y:204,width:720,size:94,weight:.semibold,ink:ink,lineHeight:122)
+    text("你的自定义 Vibe 伴侣",x:69,y:483,width:700,size:37,weight:.medium,ink:green)
+    text("常用 Agent 额度 · 任务提醒\n番茄钟 · 天气 · 收音机 · 自由接入",x:70,y:566,width:690,size:26,ink:muted,lineHeight:42)
+    officialDevice(x:1110,y:162,width:405)
+    card(NSRect(x:772,y:235,width:380,height:251),"Codex")
+    card(NSRect(x:827,y:562,width:450,height:297),"Claude Code",true)
+    pill("配套桌面端 · 蓝牙 / Wi-Fi",x:68,y:728,width:550,size:27)
+    text("适配多种使用环境。",x:70,y:807,width:700,size:25,ink:muted)
+}
+try canvas(width:1200,height:1600,output:dest.appendingPathComponent("vibe-companion-cover.png"),scale:1) {
+    background(1200,1600);brand(72,63,82)
+    text("语音输入\n额度管理",x:71,y:224,width:1058,size:146,weight:.semibold,ink:ink,lineHeight:172)
+    text("你的自定义 Vibe 伴侣",x:78,y:565,width:1050,size:55,weight:.medium,ink:green)
+    card(NSRect(x:82,y:660,width:1036,height:684),"Codex")
+    rounded(NSRect(x:170,y:1380,width:860,height:104),radius:30,fill:0xD2EBC8)
+    symbol("checkmark.circle.fill",x:202,y:1409,width:43,height:43,ink:green)
+    text("Claude Code · 任务已完成",x:270,y:1408,width:720,size:40,weight:.medium,ink:ink)
+    text("配套桌面端 · 蓝牙 / Wi-Fi",x:82,y:1514,width:1050,size:42,weight:.semibold,ink:green)
+}
+try canvas(width:1600,height:900,output:dest.appendingPathComponent("vibe-companion-quotas.png"),scale:1) {
+    background(1600,900)
+    text("常用 Agent 额度，一目了然。",x:70,y:62,width:1450,size:67,weight:.semibold,ink:ink)
+    text("Codex · Claude Code · OpenCode Go 等常用 Agent",x:75,y:161,width:1400,size:29,ink:muted)
+    card(NSRect(x:76,y:290,width:450,height:297),"Codex")
+    card(NSRect(x:574,y:290,width:450,height:297),"Claude Code",true)
+    goCard(NSRect(x:1072,y:290,width:450,height:297))
+    text("剩余额度 · 重置时间 · 自动更新",x:78,y:791,width:1400,size:34,weight:.medium,ink:green)
+}
+try canvas(width:1600,height:900,output:dest.appendingPathComponent("vibe-companion-connect.png"),scale:1) {
+    background(1600,900)
+    text("蓝牙与 Wi-Fi，适配你的使用环境。",x:70,y:65,width:1460,size:64,weight:.semibold,ink:ink)
+    let titles=["选蓝牙或 Wi-Fi","电脑点击连接","设备按键确认"]
+    let subs=["选择适合自己的方式","找到与你设备相同的尾号","看到电脑名称后确认"]
+    for i in 0..<3 {
+        let x=CGFloat(74+i*504)
+        rounded(NSRect(x:x,y:261,width:445,height:362),radius:36,fill:0xFFFFFF)
+        text(String(format:"%02d",i+1),x:x+30,y:291,width:370,size:80,weight:.semibold,ink:0xBADCB0)
+        text(titles[i],x:x+31,y:424,width:390,size:41,weight:.semibold,ink:ink)
+        text(subs[i],x:x+32,y:512,width:390,size:25,ink:muted)
+    }
+    text("发现设备 · 发起连接 · 设备确认",x:76,y:704,width:1460,size:38,weight:.medium,ink:green)
+    text("语音输入 · 额度管理 · 任务提醒 · 收音机",x:78,y:778,width:1450,size:29,ink:muted)
+}
+guard let desktopUI=NSImage(contentsOf:root.appendingPathComponent(".work/readme/frames/desktop-ui.png")) else{throw ArtworkError.image}
+func desktopPanel(_ rect:NSRect) {
+    NSGraphicsContext.saveGraphicsState()
+    let shadow=NSShadow();shadow.shadowColor=NSColor.black.withAlphaComponent(0.16);shadow.shadowBlurRadius=34;shadow.shadowOffset=NSSize(width:0,height:15);shadow.set()
+    rounded(rect,radius:22,fill:0x10191C)
+    NSShadow().set()
+    screen(desktopUI,in:rect,radius:22)
+    NSGraphicsContext.restoreGraphicsState()
+}
+try canvas(width:1600,height:1480,output:dest.appendingPathComponent("vibe-companion-desktop.png"),scale:1) {
+    background(1600,1480)
+    text("配套桌面端，连接与配置更直观。",x:76,y:57,width:1450,size:66,weight:.semibold,ink:ink)
+    text("设备连接 · 语音配置 · Agent 接入 · 个性化设置",x:81,y:157,width:1440,size:30,ink:muted)
+    desktopPanel(NSRect(x:112,y:238,width:1376,height:1193))
+}
+try canvas(width:1200,height:1600,output:dest.appendingPathComponent("folotoy-desktop.png"),scale:1) {
+    background(1200,1600);brand(72,61,72)
+    text("配套桌面端\n连接配置更直观",x:71,y:215,width:1060,size:91,weight:.semibold,ink:ink,lineHeight:119)
+    text("设备连接 · 语音配置 · Agent 接入",x:77,y:472,width:1050,size:36,ink:muted)
+    desktopPanel(NSRect(x:60,y:548,width:1080,height:936))
+    text("设备在手边，设置在电脑上。",x:76,y:1520,width:1050,size:36,weight:.medium,ink:green)
+}
+func portraitQuota(_ rect:NSRect,_ title:String,_ rows:[(String,String,String,Double)]) {
+    rounded(rect,radius:30,fill:0x14232E)
+    text(title,x:rect.minX+35,y:rect.minY+24,width:rect.width-70,size:45,weight:.medium,ink:0xF0EBDD)
+    let step=(rect.height-105)/CGFloat(rows.count)
+    for (i,row) in rows.enumerated() {
+        let y=rect.minY+104+CGFloat(i)*step,single=rows.count==1
+        text(row.0,x:rect.minX+36,y:y,width:500,size:35,ink:0xB7C9CB)
+        text(row.1,x:rect.minX+(single ? 650:760),y:y-(single ? 28:11),width:350,size:single ? 98:54,weight:.medium,ink:0xF0EBDD)
+        let barY=y+(single ? 101:52)
+        rounded(NSRect(x:rect.minX+36,y:barY,width:rect.width-72,height:10),radius:5,fill:0x304953)
+        rounded(NSRect(x:rect.minX+36,y:barY,width:(rect.width-72)*row.3,height:10),radius:5,fill:0x51DFC4)
+        text(row.2,x:rect.minX+36,y:barY+19,width:rect.width-72,size:27,ink:0xB7C9CB)
     }
 }
-// Portrait community cover: UI artwork without a physical-device mockup.
-try canvas(width: 576, height: 768, output: output.appendingPathComponent("vibe-companion-cover.png")) {
-    let bounds = NSRect(x: 0, y: 0, width: 576, height: 768)
-    NSGradient(starting: color(0x0b1d20), ending: color(0x1b3d35))!.draw(in: bounds, angle: -35)
-    mark(x: 38, y: 35, size: 44)
-    text("Vibe 伴侣", x: 96, y: 36, width: 420, size: 27, weight: .semibold)
-    text("按住说话 · 松开结束 · 一键回车", x: 98, y: 75, width: 430, size: 13, ink: 0xa9c8b5)
-    text("语音输入、AI 提醒，\n你的 Vibe Coding 伴侣。", x: 36, y: 130, width: 510,
-         size: 38, weight: .semibold, lineHeight: 54)
-    text("蓝牙 / Wi-Fi，都能连接。", x: 39, y: 254,
-         width: 510, size: 18, weight: .medium, ink: 0xb3cdbd)
-    text("公司网络不便接入？用蓝牙直接连电脑。", x: 39, y: 290,
-         width: 510, size: 14, ink: 0xa9c8b5)
-    screen(weather, in: NSRect(x: 36, y: 356, width: 225, height: 300), radius: 18)
-    screen(alert, in: NSRect(x: 285, y: 328, width: 252, height: 336), radius: 19)
-    text("把常用功能，留在手边。", x: 39, y: 685,
-         width: 500, size: 25, weight: .medium)
-    text("语音  /  天气  /  番茄钟  /  收音机", x: 40, y: 729,
-         width: 430, size: 13, ink: 0x9dbbad)
-    text("界面插画", x: 478, y: 731, width: 85, size: 10, ink: 0x7d9d8d)
+try canvas(width:1200,height:1600,output:dest.appendingPathComponent("folotoy-quotas.png"),scale:1) {
+    background(1200,1600)
+    text("常用 Agent 额度\n一目了然",x:72,y:66,width:1055,size:88,weight:.semibold,ink:ink,lineHeight:112)
+    portraitQuota(NSRect(x:72,y:316,width:1056,height:300),"Codex",[("每周剩余","47%","3 天后重置",0.47)])
+    portraitQuota(NSRect(x:72,y:646,width:1056,height:340),"Claude Code",[("5 小时","74.5%","2 小时 20 分后重置",0.745),("每周","32%","3 天后重置",0.32)])
+    portraitQuota(NSRect(x:72,y:1016,width:1056,height:480),"OpenCode Go",[("5 小时","68%","2 小时后重置",0.68),("每周","47%","3 天后重置",0.47),("每月","12.3%","12 天后重置",0.123)])
+    text("剩余额度 · 重置时间 · 自动更新",x:77,y:1544,width:1050,size:34,weight:.medium,ink:green)
 }
-
-try canvas(width: 1600, height: 600,
-           output: output.appendingPathComponent("vibe-companion-screens-actual.png"), scale: 1) {
-    color(0x101f22).setFill(); NSRect(x: 0, y: 0, width: 1600, height: 600).fill()
-    let names = ["light-home", "focus", "dark-radio-2", "dark-agent-alert"]
-    let labels = ["天气", "番茄钟", "收音机", "Agent 提醒"]
-    for index in 0..<4 {
-        let x = CGFloat(index) * 388 + 68
-        text("真实固件渲染", x: x, y: 32, width: 300, size: 14, ink: 0x78998a)
-        screen(try frame(frames, names[index]), in: NSRect(x: x, y: 79, width: 300, height: 400),
-               radius: 19, interpolation: .none)
-        text(labels[index], x: x, y: 502, width: 310, size: 23, weight: .semibold)
-        text("240 × 320 · 示例数据", x: x, y: 540, width: 322, size: 15, ink: 0xa0b8aa)
+try canvas(width:1200,height:1600,output:dest.appendingPathComponent("folotoy-connect.png"),scale:1) {
+    background(1200,1600);brand(72,61,72)
+    text("蓝牙与 Wi-Fi\n适配多种环境",x:72,y:215,width:1055,size:91,weight:.semibold,ink:ink,lineHeight:119)
+    let titles=["选择蓝牙或 Wi-Fi","电脑发起连接","设备按键确认"]
+    let descriptions=["选择适合自己的连接方式","在 App 中找到你的设备","确认电脑名称，完成连接"]
+    for i in 0..<3 {
+        let y=CGFloat(520+i*240)
+        rounded(NSRect(x:72,y:y,width:1056,height:200),radius:30,fill:0xFFFFFF)
+        text(String(format:"%02d",i+1),x:106,y:y+44,width:130,size:72,weight:.semibold,ink:0xA6C99A)
+        text(titles[i],x:290,y:y+37,width:790,size:48,weight:.semibold,ink:ink)
+        text(descriptions[i],x:292,y:y+117,width:790,size:33,ink:muted)
+    }
+    text("语音输入 · 额度管理 · 任务提醒",x:77,y:1337,width:1050,size:36,ink:muted)
+    text("连接设备，开启你的 Vibe 伴侣。",x:76,y:1437,width:1050,size:43,weight:.medium,ink:green)
+}
+guard let cover=NSImage(contentsOf:dest.appendingPathComponent("vibe-companion-cover.png")) else{throw ArtworkError.image}
+try canvas(width:1200,height:720,output:root.appendingPathComponent(".work/readme/folotoy-thumbnail-review.png"),scale:1) {
+    color(0x121212).setFill();NSRect(x:0,y:0,width:1200,height:720).fill()
+    text("FoloToy 列表缩略图可读性",x:42,y:32,width:1100,size:31,weight:.semibold)
+    text("按 100 / 140 / 236 px 宽度预览；不依赖缩略图里的小字",x:45,y:89,width:1100,size:19,ink:0xA5B5A8)
+    for (i,w) in [100.0,140.0,236.0].enumerated() {
+        let x=CGFloat(68+i*380),cw:CGFloat=310
+        rounded(NSRect(x:x,y:158,width:cw,height:501),radius:24,fill:0x1B1F1D,stroke:0x303C34)
+        screen(cover,in:NSRect(x:x+(cw-w)/2,y:188,width:w,height:w*4/3),radius:8)
+        text("Vibe 伴侣",x:x+24,y:527,width:cw-48,size:23,weight:.semibold)
+        text("语音输入、额度管理，\n你的自定义 Vibe 伴侣。",x:x+25,y:573,width:cw-48,size:18,ink:0xB9C7BC,lineHeight:27)
+        text("\(Int(w)) px",x:x+24,y:682,width:cw-48,size:18,ink:0x79D78F)
     }
 }
-print("README artwork: rendered high-resolution illustrations and actual firmware references to \(output.path)")
+print("Rendered product, desktop and four-image community artwork")

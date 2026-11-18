@@ -91,6 +91,7 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
         tests/vibe/test_model.c main/vibe/model.c -o "${test_dir}/test_vibe_model"
     "${test_dir}/test_vibe_model"
+
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
         tests/vibe/test_input_gate.c -o "${test_dir}/test_vibe_input_gate"
     "${test_dir}/test_vibe_input_gate"
@@ -150,6 +151,9 @@ run_static_checks() {
     "${test_dir}/test_vibe_ble_parameters"
     "${CC:-cc}" -std=c11 -Wno-deprecated-declarations -Itests/vibe/vendor/cjson -c \
         tests/vibe/vendor/cjson/cJSON.c -o "${test_dir}/vibe_json.o"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe -Itests/vibe/vendor/cjson \
+        tests/vibe/test_quota.c main/vibe/quota.c main/vibe/model.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_quota"
+    "${test_dir}/test_vibe_quota"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe -Itests/vibe/vendor/cjson \
         tests/vibe/test_connection.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_connection"
     "${test_dir}/test_vibe_connection"

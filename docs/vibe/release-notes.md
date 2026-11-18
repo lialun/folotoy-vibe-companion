@@ -1,71 +1,79 @@
 **English** · [简体中文](release-notes.zh_CN.md)
 
-# Vibe Companion v0.8.4
+# Vibe Companion v0.9.0
 
 ## New in this release
 
-Connect over Bluetooth or Wi-Fi, with dictation, Enter, Agent alerts and radio
-available over Bluetooth. When office networks cannot admit the device, connect
-directly to your Mac. The computer fetches and decodes Internet radio.
+Agent quotas join voice input and task alerts on your desk. The companion collects
+Codex, Claude Code and OpenCode Go allowances from existing Agent integrations,
+including remaining percentages and reset times. Go keeps its five-hour, weekly
+and monthly windows separate rather than presenting a currency balance.
 
-Pairing codes are replaced with computer-initiated discovery and device-button
-approval. Keep both links attached and fall back when a route fails. New devices
-can start over Bluetooth; Wi-Fi setup adds a ten-second manual-browser fallback.
-This release also improves re-pairing, radio buffering/resume and dark-screen
-confirmation-button behavior.
+Quota pages come before weather and share a consistent global page counter.
+Three percentage windows fit one page. Collection normally runs every five
+minutes during recent activity, stops after ten idle minutes and backs off on
+failure. A sample expires after fifteen minutes thirty seconds; reconnects do
+not renew it. Unavailable data does not create an error card.
 
-A community firmware and macOS companion for FoloToy AI Passport. The version is
-identified by the release tag and package filenames.
+The desktop app adds **Connect your own Agent**. Copy its prompt to integrate
+local task alerts and real quota observations through the account-private
+helper. Custom Agents keep their own display names; no conversation text or
+credentials are sent to the device. See the source guides for field limits and
+callback requirements.
+
+This release also improves Bluetooth notification handling when the operating
+system changes an unrelated subscription. Use the matching firmware and app.
 
 ## Included
 
-- Wireless hold-to-talk input through the device microphone, with a separate
-  Enter action. Voice remains available while using Pomodoro or radio.
-- Agent notifications for Codex, Claude Code, OpenCode, DeepSeek Harness, ZCode,
-  Gemini CLI and Qwen Code, with per-integration event coverage. The first alert
-  is immediate; additional callbacks for the same Agent/session within one second
-  are suppressed. No conversation content is forwarded.
-- A compact notification overlay with screen wake and sound, five-second expiry,
-  and dismissal that preserves the original button action.
-- A manually started focus/rest cycle, four weather pages, light/dark/scheduled
-  themes, and up to 20 selected radio stations with desktop search and ordering.
-- Discover nearby devices over BLE or on the same Wi-Fi, with both links merged
-  into one device row. Start connecting on the computer and confirm on the
-  device. Both links may attach; application traffic selects one working route.
-  Switching computers requires device approval and revokes the old controller.
-- Radio is decoded on the computer and streamed over UDP or BLE to a bounded
-  device cache. The current 16 kHz mono format fits 1.6 seconds of compressed
-  audio with a 1.2-second startup prefill; it reduces high-frequency detail.
-  The new app also serves the earlier 24 kHz format. Update both packages together.
-- Phone setup for up to five remembered Wi-Fi networks, automatic reconnect,
-  and device/desktop settings sync. Bluetooth can be selected at first startup.
-- When the screen is off, the first press wakes it without activating menu or
-  approval actions. Home-screen voice and Enter remain directly available.
-- A menu-bar macOS app with one universal Apple Silicon/Intel DMG or ZIP, and
-  a verified merged firmware image for the ESP32-C3's 8 MB Flash.
+- Voice input and Enter, Agent task alerts, quota/weather rotation, Pomodoro,
+  Internet radio, appearance and everyday settings in the companion app.
+- Seven built-in notification integrations, quota collection for Codex, Claude
+  Code and OpenCode Go, plus local custom-Agent notification/quota callbacks.
+- Bluetooth and Wi-Fi discovery merged into one device row. Start connections
+  on the computer and confirm on the device; both links may remain attached.
+- Computer-decoded radio over either link, with voice interruption and resume.
+- Universal Apple Silicon/Intel macOS app, bilingual installation guides,
+  redistribution notices and a verified merged firmware image.
 
-## Install
+## Install and update
 
-Use the firmware and app from the same release. See the attached `INSTALL.txt`
-or `INSTALL.zh_CN.txt` for Mac installation, BlackHole 2ch, input-method setup,
-permissions and pairing. The source tree's `docs/vibe/README.md` covers device
-flashing and controls. The merged `FoloToy-AI-Passport-full.bin` is written at
-`0x0`; a full install can reset device settings. Check `SHA256SUMS.txt`.
+Install the firmware and app from this same release. See `INSTALL.txt` or
+`INSTALL.zh_CN.txt` for installation, permissions, input-method setup and
+connection. Update existing Agent integrations where the app offers it; restart
+or reload the Agent session and complete any trust prompt inside that Agent.
+Quota availability depends on the logged-in plan and fields supplied by the Agent.
 
-Packages use free ad-hoc signing and are not Apple notarized. A first launch or
-update can require per-app approval and refreshed keyboard permission. No paid
-Apple account is required and the app does not use Keychain.
+The merged `FoloToy-AI-Passport-full.bin` is written at `0x0` and can reset device
+settings. Developers preserving settings should use the compatible application
+partition workflow described in the source documentation. Verify `SHA256SUMS.txt`.
 
-## Validation limits
+Packages use free ad-hoc signing and are not Apple notarized. Initial launch or
+an update may require system approval and refreshed Accessibility authorization.
 
-Build and host tests are separate from physical-device acceptance.
-The local Intel candidate passed automatic checks and user-assisted voice/Enter,
-radio/resume, BLE re-pairing, phone Wi-Fi setup and installed-hook checks. Power
-and battery standby were deferred by the user. Clean installation, Apple
-Silicon/macOS 13 execution and physical multiple-computer/device tests remain
-unverified. The release workflow reports its own build and host-test results.
-The current client is macOS-only. A desktop controls one selected device and a
-device authorizes one computer at a time; handover replaces that authorization.
-Agent coverage depends on version and local entry point; radio availability depends on the stream,
-network, format, and available device resources. Third-party notices accompany
-both packages. Final release-specific results must be reviewed before publishing.
+## Build from source
+
+Activate ESP-IDF 5.5.3 and run `./tools/validate.sh` for host checks, the isolated
+firmware build and merged-image verification. `./tools/validate.sh --firmware`
+runs the firmware-only gate and produces `build/FoloToy-AI-Passport-full.bin`.
+On macOS, run `bash macos/build.sh` for the universal app, native tests, DMG and ZIP.
+
+## Validation scope
+
+Local checks cover the firmware build, host/native tests, actual-font LVGL
+renders in both themes, live Codex quotas, installed custom-helper callbacks,
+and physical Wi-Fi/BLE quota acceptance, retry expiry and conditional clearing.
+The installed custom notification was acknowledged by the device, and its quota
+sample appeared in the desktop app and expired without renewal.
+
+Claude Code and OpenCode Go adapters were checked with interface/response
+fixtures; live subscriptions for those two services were not available locally.
+The new three-window device view has rendered-font coverage but no separate
+physical visual confirmation. Power/battery, clean-system installation, physical
+Apple Silicon/minimum macOS, and physical multiple-computer/device tests remain
+outside the completed local scope. Earlier voice, Enter, radio/resume, re-pairing
+and phone Wi-Fi acceptance are recorded in the previous release.
+
+The current desktop client supports macOS. One device authorizes one computer
+at a time; a confirmed handover replaces that authorization. Keep the computer
+awake and the app running. The computer fetches radio and online quota data.
