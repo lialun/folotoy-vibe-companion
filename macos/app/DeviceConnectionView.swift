@@ -12,7 +12,7 @@ struct DeviceConnectionView:View {
                 BrandMark(size:40)
                 Text(model.state.message).font(.system(size:15,weight:.medium))
                 Spacer()
-                Button { model.engine.retry() } label: { Label("刷新",systemImage:"arrow.clockwise") }
+                Button { model.retryConnection() } label: { Label("刷新",systemImage:"arrow.clockwise") }
                     .buttonStyle(.borderless).font(.system(size:11))
             }
             if model.state.devices.isEmpty {
@@ -53,7 +53,7 @@ struct DeviceConnectionView:View {
                     .font(.system(size:11)).foregroundStyle(Palette.muted)
                 HStack {
                     Button("打开蓝牙设置") { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.Bluetooth")!) }
-                    Button("重试蓝牙") { model.engine.retryBluetooth() }
+                    Button("重试蓝牙") { model.retryBluetooth() }
                 }.controlSize(.small).buttonStyle(.bordered)
             }
             if model.state.connectionRequestActive {

@@ -27,7 +27,11 @@ final class Engine {
     private var clientID=""
     private var bluetooth:BluetoothLink?
     private var transport=ConnectionTransport.wifi
-    private var authenticated=false,paused=false,pairing=false
+    private var authenticated=false,pairing=false,running=false,tearingDown=false
+    private let lifecycle=EngineLifecycle()
+    private var paused:Bool {get{lifecycle.userPaused} set{lifecycle.userPaused=newValue}}
+    private var powerSuspended:Bool {lifecycle.isSuspended}
+    var connectionPaused:Bool {lifecycle.userPaused}
     private var connectionRequest="",requestStarted=Date.distantPast,lastRequest=Date.distantPast,connectIntent=false
     private var requestDelivered=false
     private var wifiLastSeen=Date.distantPast,bleLastSeen=Date.distantPast
@@ -64,8 +68,9 @@ final class Engine {
     var onState:((ConnectionState)->Void)?
     var onSettings:((DeviceSettings,String)->Void)?
     var onResult:((Bool,String)->Void)?
-    init(preview:Bool=false,lanEnabled:Bool=true) {
+    init(preview:Bool=false,lanEnabled:Bool=true,connectionPaused:Bool=false) {
         self.lanEnabled=lanEnabled
+        lifecycle.userPaused=connectionPaused
         if preview { return }
         clientID=ComputerIdentity.load()
         device=UserDefaults.standard.string(forKey:"device") ?? ""
@@ -73,10 +78,14 @@ final class Engine {
         token=PairingStore.load(device) ?? ""
         shortcut=UserDefaults.standard.string(forKey:"shortcut") ?? "ctrl+option+v"
     }
-    func start() { work.async {
+    func start() { work.async {self.startNow()} }
+    private func startNow() {
+        guard !running,!powerSuspended else { return }
+        running=true
+        keyboard.resume(if:{!self.powerSuspended})
         let ble=BluetoothLink(queue:self.work);self.bluetooth=ble
         ble.onFound={ [weak self,weak ble] id,identifier,connectable in
-            guard let self=self else { return }
+            guard let self=self,!self.powerSuspended else { return }
             self.discovery.foundBLE(id,identifier:identifier,connectable:connectable)
             if id==self.device,!self.paused,(!self.token.isEmpty || !self.connectionRequest.isEmpty) {
                 if connectable { ble?.connect(id) }
@@ -85,35 +94,37 @@ final class Engine {
             self.publish()
         }
         ble.onPacket={ [weak self] id,data in
-            guard let self=self,id==self.device else { return }
+            guard let self=self,!self.powerSuspended,id==self.device else { return }
             self.processPacket(data,from:Self.bleEndpoint,viaBLE:true);self.publish()
         }
         ble.onReady={ [weak self] in
-            guard let self=self,!self.paused else { return }
+            guard let self=self,!self.powerSuspended,!self.paused else { return }
             if self.peer==nil { self.peer=Self.bleEndpoint }
             if !self.token.isEmpty { self.beacon(broadcast:false) }
             self.sendConnectionRequest();self.lastBeacon=Date();self.publish()
         }
         ble.onDisconnected={ [weak self] message in
-            guard let self=self else { return }
+            guard let self=self,!self.powerSuspended else { return }
             self.bleLastSeen = .distantPast;self.updateTransport()
             if !self.paused && Date().timeIntervalSince(self.wifiLastSeen)>ConnectionTiming.linkFresh { self.connectionMessage=message }
             self.publish()
         }
         ble.onAuthenticationFailed={ [weak self] message in
-            guard let self=self else { return }
+            guard let self=self,!self.powerSuspended else { return }
             self.bleLastSeen = .distantPast
             if Date().timeIntervalSince(self.wifiLastSeen)>ConnectionTiming.linkFresh { self.connectionMessage=message }
             self.publish()
         }
         ble.onStatus={ [weak self] status in
-            guard let self=self else { return };self.state.bluetoothStatus=status
+            guard let self=self,!self.powerSuspended else { return };self.state.bluetoothStatus=status
             if !self.paused && !self.authenticated && self.connectionRequest.isEmpty { self.connectionMessage=status }
             self.publish()
         }
-        ble.onPairingRepairChanged={ [weak self] id,required in self?.setBluetoothPairingRepair(id,required:required) }
+        ble.onPairingRepairChanged={ [weak self] id,required in
+            guard let self=self,!self.powerSuspended else {return};self.setBluetoothPairingRepair(id,required:required)
+        }
         self.startTimer();self.open()
-    } }
+    }
     private static var bleEndpoint:sockaddr_in {
         var address=sockaddr_in();address.sin_family=sa_family_t(AF_INET);address.sin_port=LANSocket.discoveryPort.bigEndian
         address.sin_addr.s_addr=inet_addr("127.0.0.1");return address
@@ -125,7 +136,8 @@ final class Engine {
         state.waitingForConfirmation = state.connectionRequestActive && requestDelivered
         state.wifiConnected=authenticated && Date().timeIntervalSince(wifiLastSeen)<ConnectionTiming.linkFresh
         state.bleConnected=authenticated && Date().timeIntervalSince(bleLastSeen)<ConnectionTiming.linkFresh
-        state.paired = !token.isEmpty && authenticated;state.recording=active;state.audio=AudioSink.deviceUID() != nil
+        state.paired = !token.isEmpty && authenticated;state.recording=active
+        if !powerSuspended {state.audio=AudioSink.deviceUID() != nil}
         var copy=state
         let needsConnection=token.isEmpty,paused=self.paused,message=connectionMessage,selected=device,searchAge=Date().timeIntervalSince(searchStarted)
         let targetAvailable=state.devices.contains(where:{$0.id==device})
@@ -155,6 +167,7 @@ final class Engine {
     }
     func retry(resume:Bool=true) { work.async { self.retryNow(resume:resume) } }
     private func retryNow(resume:Bool) {
+        guard running,!powerSuspended else { return }
         guard resume || !paused else { publish();return }
         paused=false;connectionMessage="";state.error="";searchStarted=Date();lastDiscovery = .distantPast;lastBeacon = .distantPast
         if socketFD<0 { open() }
@@ -171,14 +184,14 @@ final class Engine {
         guard id==device else { return };state.bluetoothPairingRepairRequired=required;publish()
     }
     func retryBluetooth() { work.async {
-        guard !self.device.isEmpty else { return }
+        guard self.running,!self.powerSuspended,!self.device.isEmpty else { return }
         self.paused=false
         if !self.authenticated { self.connectIntent=true;self.connectionMessage="正在连接蓝牙…" }
         if !self.authenticated && self.connectionRequest.isEmpty && self.token.isEmpty { self.beginConnectionRequest() }
         self.bluetooth?.scan();self.bluetooth?.connect(self.device,resetBackoff:true);self.publish()
     } }
     private func selectDeviceNow(_ id:String) {
-        guard let found=discovery.devices[id] else { return }
+        guard running,!powerSuspended,let found=discovery.devices[id] else { return }
         cancelConnectionRequest()
         if authenticated { send(["type":"pc.disconnect","token":token]) }
         bluetooth?.disconnect();disconnect("已切换设备");device=id;token=PairingStore.load(id) ?? ""
@@ -189,7 +202,7 @@ final class Engine {
         if token.isEmpty { beginConnectionRequest() } else { beacon(broadcast:false) }
         publish()
     }
-    func cancelConnection() { work.async {
+    func cancelConnection() { paused=true;work.async {
         self.cancelConnectionRequest();self.paused=true;self.bluetooth?.disconnect();self.disconnect("已取消连接");self.connectionMessage="已取消连接";self.publish()
     } }
     private func cancelConnectionRequest() {
@@ -222,15 +235,16 @@ final class Engine {
         if let found=discovery.devices[device],found.hasWiFi { _=send(body,type:type,to:found.endpoint) }
         if bluetooth?.isActive==true { _=send(body,type:type,viaBLE:true) }
     }
-    func disconnectDevice() { work.async {
+    func disconnectDevice() { paused=true;work.async {
         if self.authenticated { self.send(["type":"pc.disconnect","token":self.token,"device":self.device,"client":self.clientID]) }
         self.cancelConnectionRequest();self.paused=true;self.disconnect("已断开");self.connectionMessage="已断开";self.publish()
-        if self.bluetooth?.isActive==true { self.work.asyncAfter(deadline:.now()+0.5) { if self.paused { self.bluetooth?.disconnect() } } }
+        if self.bluetooth?.isActive==true { self.bluetooth?.disconnect(after:0.5) { [weak self] in self?.paused==true } }
     } }
     func unpairDevice() { work.async {
         guard self.authenticated else { return };self.request("pc.unpair",extra:[:])
     } }
     @discardableResult private func send(_ body:[String:Any],type:UInt8=2,to target:sockaddr_in?=nil,viaBLE:Bool=false)->Bool {
+        guard !powerSuspended || tearingDown else {return false}
         var payload=body
         if payload["device"]==nil && type != 3 { payload["device"]=device }
         if payload["client"]==nil && type != 3 { payload["client"]=clientID }
@@ -284,7 +298,7 @@ final class Engine {
         self.quotaSamples=next;self.flushQuotas()
     } }
     private func flushQuotas() {
-        guard authenticated,quotaCapable,!paused,!active,Date().timeIntervalSince(lastSeen)<peerTimeout else{return}
+        guard !powerSuspended,authenticated,quotaCapable,!paused,!active,Date().timeIntervalSince(lastSeen)<peerTimeout else{return}
         let now=Date()
         for (agent,sample) in quotaSamples {
             if let sent=quotaSent[agent],sent.0==sample.id,now.timeIntervalSince(sent.1)<30 {continue}
@@ -295,7 +309,7 @@ final class Engine {
     }
     func notifyAgent(_ event:AgentEvent) {
         work.async {
-            guard self.authenticated,self.peer != nil,!self.token.isEmpty,Date().timeIntervalSince(self.lastSeen)<self.peerTimeout else { DispatchQueue.main.async{self.onAgentResult?("设备离线，本次提醒未发送")};return }
+            guard !self.powerSuspended,self.authenticated,self.peer != nil,!self.token.isEmpty,Date().timeIntervalSince(self.lastSeen)<self.peerTimeout else { DispatchQueue.main.async{self.onAgentResult?("设备离线，本次提醒未发送")};return }
             guard self.agentCapable else { DispatchQueue.main.async{self.onAgentResult?("请先更新支持 Agent 提醒的设备固件")};return }
             guard self.agentPending.count<8 else { return }
             var body=event.deviceBody;body["type"]="agent.notify";body["id"]=event.id;body["token"]=self.token
@@ -304,6 +318,7 @@ final class Engine {
         }
     }
     private func tick() {
+        guard !powerSuspended else { return }
         let now=Date()
         // Fresh connectable advertisements drive automatic BLE attachment via
         // onFound. Do not repeatedly connect to a radio that stopped advertising.
@@ -353,6 +368,7 @@ final class Engine {
         publish()
     }
     private func processPacket(_ data:Data,from:sockaddr_in,viaBLE:Bool) {
+        guard !powerSuspended else {return}
         guard let packet=Packet.parse(data) else { return }
         if case .event(let body)=packet,body["event"] as? String=="connection.reply" {
             guard !connectionRequest.isEmpty,body["request"] as? String==connectionRequest,!paused else { return }
@@ -460,7 +476,7 @@ final class Engine {
                 let clock=DispatchSource.makeTimerSource(queue:work)
                 clock.schedule(deadline:.now(),repeating:.milliseconds(20),leeway:.milliseconds(3))
                 clock.setEventHandler{ [weak self] in
-                    guard let self=self else{return};let now=Date()
+                    guard let self=self,!self.powerSuspended else{return};let now=Date()
                     self.radioMaxTickGap=max(self.radioMaxTickGap,now.timeIntervalSince(self.radioTickAt));self.radioTickAt=now
                     self.flushRadioPlayback()
                 };radioClock=clock;clock.resume()
@@ -477,11 +493,13 @@ final class Engine {
             if active && ending { endVoice(immediate:true) }
             guard authenticated,!token.isEmpty,!active else { return }
             do {
-                try sink.start();try keyboard.start(shortcut);active=true;ending=false;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
+                try sink.start()
+                guard !powerSuspended,try keyboard.start(shortcut) else {sink.stop();return}
+                active=true;ending=false;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
                 voiceStarted=Date();voiceInitialPackets=state.packets;voiceInitialDropped=state.dropped;voiceMaxGap=0
                 voiceLog.info("Voice started transport=\(self.transport.rawValue,privacy:.public)")
             }
-            catch { sink.stop();keyboard.stop();state.error=error.localizedDescription }
+            catch { sink.stop();keyboard.stop();state.error=powerSuspended ? "" : error.localizedDescription }
         case "voice.end": endVoice(immediate:false)
         case "key.action":
             voiceLog.info("Key action received authenticated=\(self.authenticated) active=\(self.active) permitted=\(Shortcut.permitted)")
@@ -516,7 +534,7 @@ final class Engine {
             if entry.kind=="pair" { pairing=false;if !ok { connectionMessage=body["error"] as? String ?? "配对失败，请重试" } }
             if ok,entry.kind=="config.get" { authenticated=true;lastSeen=Date();connectionMessage="";UserDefaults.standard.set(device,forKey:"device") }
             if ok,entry.kind=="pc.unpair" {
-                if transport == .bluetooth { work.asyncAfter(deadline:.now()+0.3) { self.bluetooth?.disconnect() } }
+                if transport == .bluetooth { bluetooth?.disconnect(after:0.3) { [weak self] in self?.paused==true } }
                 PairingStore.remove(device);UserDefaults.standard.removeObject(forKey:"device")
                 token="";candidateToken="";paused=true;disconnect("已解除配对")
                 DispatchQueue.main.async { self.onResult?(true,"已解除配对") };return
@@ -534,10 +552,10 @@ final class Engine {
         pending=pending.filter{$0.value.kind != "weather.cache"}
     }
     private func refreshWeather() {
-        guard authenticated,!paused,weatherCapable,!active,radioPlayback==nil,weatherJob==nil,pending.isEmpty,Date()>=nextWeather,let location=weatherLocation else{return}
+        guard !powerSuspended,authenticated,!paused,weatherCapable,!active,radioPlayback==nil,weatherJob==nil,pending.isEmpty,Date()>=nextWeather,let location=weatherLocation else{return}
         nextWeather=Date().addingTimeInterval(60);weatherGeneration+=1;let expected=weatherGeneration
         weatherJob=WeatherFetch(location:location) { [weak self] result in self?.work.async { [weak self] in
-            guard let self=self,self.weatherGeneration==expected,self.authenticated,self.weatherLocation==location else{return}
+            guard let self=self,!self.powerSuspended,self.weatherGeneration==expected,self.authenticated,self.weatherLocation==location else{return}
             self.weatherJob=nil
             guard !self.active,self.radioPlayback==nil else{return}
             if case .success(let sample)=result {
@@ -552,7 +570,7 @@ final class Engine {
         bluetooth?.discardRadio();radioPlayback?.stop();radioPlayback=nil;radioDelivery=nil
     }
     private func flushRadioPlayback() {
-        guard authenticated,!paused,let playback=radioPlayback,var delivery=radioDelivery else { return }
+        guard !powerSuspended,authenticated,!paused,let playback=radioPlayback,var delivery=radioDelivery else { return }
         while delivery.hasCredit,let block=playback.take() { _=delivery.append(block) }
         let found=discovery.devices[device],wifi=found.map{$0.hasWiFi && socketFD>=0} ?? false
         for (packet,ble) in delivery.packets(now:Date().timeIntervalSince1970,wifi:wifi,ble:bluetooth?.isActive==true,primaryBLE:transport == .bluetooth) {
@@ -719,6 +737,7 @@ final class Engine {
         check(engine.paused && engine.connectionRequest.isEmpty,"device refusal ends the connection attempt")
 
         let switching=Engine(preview:true)
+        switching.running=true
         switching.clientID=engine.clientID
         let first="001122334455",second="001122334466"
         var otherLAN=lan;otherLAN.sin_addr.s_addr=inet_addr("192.168.1.21")
@@ -780,19 +799,103 @@ final class Engine {
             check(radio.radioPlayback==nil && radio.radioActivity==nil,"unsupported format cannot create a decoder or timing activity")
         }
     }
-    func stop(completion:(()->Void)?=nil) {
-        work.sync {
-            if authenticated { send(["type":"pc.disconnect","token":token,"device":device,"client":clientID]) }
-            cancelConnectionRequest()
-            disconnect("连接已结束，未确认的修改请重新读取");
-            keyboard.stop();sink.stop();timer?.cancel();timer=nil;socketGeneration+=1
-            if let reader=reader {
-                let fd=socketFD
-                reader.setCancelHandler { Darwin.close(fd);if let completion=completion { DispatchQueue.main.async(execute:completion) } }
-                reader.cancel()
-            } else if let completion=completion { DispatchQueue.main.async(execute:completion) }
-            bluetooth?.disconnect();reader=nil;socketFD = -1;localPort=0
+    static func testSleepLifecycle(_ check:(Bool,String)->Void) {
+        let backlog=Engine(preview:true),entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
+        backlog.work.async {entered.signal();_=release.wait(timeout:.now()+5)}
+        check(entered.wait(timeout:.now()+5) == .success,"create a stalled worker before system sleep")
+        let before=ProcessInfo.processInfo.systemUptime
+        backlog.suspendForSleep()
+        check(ProcessInfo.processInfo.systemUptime-before<0.5 && backlog.powerSuspended,"sleep closes work admission without waiting for a stalled network queue")
+        backlog.resumeAfterSleep();backlog.suspendForSleep();release.signal()
+        backlog.work.sync {
+            check(backlog.powerSuspended && !backlog.running && backlog.bluetooth==nil,"late resume behind a stalled worker cannot reconnect after another sleep")
         }
+        let paused=Engine(preview:true,connectionPaused:true)
+        check(paused.connectionPaused,"permission recovery applies disconnect intent before startup")
+        let engine=Engine(preview:true)
+        let receiver=try! LANSocket.open();defer{Darwin.close(receiver.descriptor)}
+        engine.device="aabbccddeeff";engine.token=String(repeating:"a",count:64)
+        engine.work.sync {
+            engine.running=true
+            engine.state.connected=true;engine.state.recording=true
+            let clock=DispatchSource.makeTimerSource(queue:engine.work)
+            clock.schedule(deadline:.now()+3600);clock.resume();engine.timer=clock
+            let connection=try! LANSocket.open()
+            engine.socketFD=connection.descriptor
+            let source=DispatchSource.makeReadSource(fileDescriptor:connection.descriptor,queue:engine.work)
+            source.setCancelHandler{Darwin.close(connection.descriptor)};source.resume();engine.reader=source
+            var endpoint=Self.bleEndpoint;endpoint.sin_port=receiver.port.bigEndian
+            engine.peer=endpoint;engine.authenticated=true
+            engine.radioTransfer=try! RadioListTransfer(stations:[],revision:1,capacity:20)
+            engine.handle(["event":"radio.open","session":"0123456789abcdef","url":"http://127.0.0.1:9/absent","window":10])
+            check(engine.radioActivity != nil && engine.radioClock != nil && engine.radioPlayback != nil,"sleep cleanup starts with a live radio activity and decoder")
+        }
+        engine.suspendForSleep()
+        engine.start();engine.retry();engine.retryBluetooth()
+        engine.work.sync {
+            let discoveryAt=engine.lastDiscovery
+            engine.tick()
+            check(engine.lastDiscovery==discoveryAt,"a queued timer callback cannot perform discovery after sleep")
+            check(engine.powerSuspended && !engine.running && engine.bluetooth==nil && engine.timer==nil && engine.socketFD<0,"late startup and retry requests cannot restart a sleeping engine")
+            check(engine.device=="aabbccddeeff" && engine.token==String(repeating:"a",count:64) && !engine.paused,"sleep retains authorization and the user's reconnect preference")
+            check(engine.radioClock==nil && engine.radioActivity==nil && !engine.active && !engine.sink.running,"sleep releases audio timing, playback and keyboard capture")
+            check(!engine.state.connected && !engine.state.recording,"sleep cleanup removes stale Connected/Recording UI state")
+        }
+        var bytes=[UInt8](repeating:0,count:2048)
+        var readable=pollfd(fd:receiver.descriptor,events:Int16(POLLIN),revents:0)
+        _=Darwin.poll(&readable,1,500)
+        let received=Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)
+        let packet=received>1 ? Data(bytes[1..<received]):Data()
+        let command=(try? JSONSerialization.jsonObject(with:packet)) as? [String:Any]
+        check(command?["type"] as? String=="radio.abort","sleep cancels a pending station-list write before closing its transport")
+        engine.suspendForSleep();engine.stop();engine.start()
+        engine.work.sync {
+            check(engine.powerSuspended && !engine.running && engine.timer==nil,"repeated stop or permission reload cannot bypass sleep suspension")
+        }
+    }
+    func suspendForSleep() {
+        // Close admission on the caller immediately. Slow audio/driver cleanup
+        // runs on its owning queue and never blocks the system sleep callback.
+        lifecycle.suspend()
+        // Release held keys before acknowledging system sleep. Deferring this
+        // to a later maintenance wake could itself synthesize user activity.
+        keyboard.suspendForSleep()
+        work.async {self.stopNow()}
+    }
+    func resumeAfterSleep() {
+        let request=lifecycle.requestResume()
+        work.async {
+            guard self.lifecycle.completeResume(request) else {return}
+            self.startNow()
+        }
+    }
+    func stop(completion:(()->Void)?=nil) {
+        if let completion=completion {work.async {self.stopNow(completion:completion)}}
+        else {work.sync {stopNow()}}
+    }
+    private func stopNow(completion:(()->Void)?=nil) {
+        tearingDown=true;defer{tearingDown=false}
+        running=false
+        cancelRadio("连接已结束，未确认的修改请重新读取")
+        if authenticated { sendOnAvailableLinks(["type":"pc.disconnect","token":token,"device":device,"client":clientID]) }
+        cancelConnectionRequest()
+        // Release radio links before potentially slow Core Audio disposal.
+        bluetooth?.shutdown();bluetooth=nil
+        timer?.cancel();timer=nil;socketGeneration+=1
+        if let reader=reader {
+            let fd=socketFD
+            // Reader callbacks share this serial queue. Invalidate their
+            // generation first, then close here; the old cancel handler must
+            // not later close an unrelated descriptor that reused this number.
+            reader.setCancelHandler {}
+            reader.cancel()
+            if fd>=0 {Darwin.close(fd)}
+        }
+        reader=nil;socketFD = -1;localPort=0
+        disconnect("连接已结束，未确认的修改请重新读取")
+        keyboard.stop();sink.stop()
+        publish()
+        if let completion=completion {DispatchQueue.main.async(execute:completion)}
     }
 }
 

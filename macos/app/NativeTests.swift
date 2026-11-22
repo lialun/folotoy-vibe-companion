@@ -10,6 +10,7 @@ enum NativeTests {
         RadioTests.run(check)
         LANTests.run(check)
         ConnectionTests.run(check)
+        ShortcutSleepTests.run(check)
         check(VoiceCodec.decode(Data(repeating:0,count:803))==nil,"short ADPCM block")
         var block=Data(repeating:0,count:804);block[2]=89
         check(VoiceCodec.decode(block)==nil,"invalid ADPCM step index")
@@ -107,12 +108,17 @@ enum NativeTests {
         var savedPrefs=DeviceSettings();savedPrefs.brightness=35
         let draftSession=PermissionSession(settings:savedPrefs,confirmed:DeviceSettings(),loaded:true,shortcut:"ctrl+option+b",cityQuery:"北京",
             stations:Array(RadioStation.presets.reversed()),baseline:RadioStation.presets,revision:3,capacity:20,radioLoaded:true,
-            query:"音乐",chineseOnly:false,source:1,customName:"未保存电台",customURL:"https://example.org/draft",tab:4,visible:true)
+            query:"音乐",chineseOnly:false,source:1,customName:"未保存电台",customURL:"https://example.org/draft",tab:4,visible:true,connectionPaused:true)
         let resumeID=PermissionSessionStore.save(draftSession,directory:store)!
         let resumeFile=store.appendingPathComponent("permission-resume-\(resumeID).json")
         let resumeAttributes=try! FileManager.default.attributesOfItem(atPath:resumeFile.path)
         check((resumeAttributes[.posixPermissions] as? NSNumber)?.intValue==0o600,"permission recovery draft is private")
         let resumed=PermissionSessionStore.consume(resumeID,directory:store)!
+        check(resumed.connectionPaused==true && Engine(preview:true,connectionPaused:resumed.connectionPaused ?? false).connectionPaused,"permission relaunch preserves manual disconnect before reconnect can start")
+        var legacySession=try! JSONSerialization.jsonObject(with:JSONEncoder().encode(draftSession)) as! [String:Any]
+        legacySession.removeValue(forKey:"connectionPaused")
+        let oldSession=try! JSONDecoder().decode(PermissionSession.self,from:JSONSerialization.data(withJSONObject:legacySession))
+        check(oldSession.connectionPaused==nil,"older permission snapshots remain compatible")
         check(resumed.settings.brightness==35 && resumed.confirmed?.brightness==50 && resumed.stations==draftSession.stations && resumed.baseline==RadioStation.presets,"preserve unsaved settings and station order across permission reload")
         check(resumed.tab==4 && resumed.customURL==draftSession.customURL && resumed.shortcut==draftSession.shortcut && !resumed.chineseOnly,"preserve form input and navigation during permission reload")
         check(PermissionSessionStore.consume(resumeID,directory:store)==nil && !FileManager.default.fileExists(atPath:resumeFile.path),"recovery draft consumed once")

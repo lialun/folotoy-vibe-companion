@@ -1,9 +1,12 @@
 import SwiftUI
 import AppKit
+import os
 
 final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
     var model:AppModel?,window:NSWindow?,item:NSStatusItem?
     private var permissionReloaded=false,permissionProbeRunning=false,awaitingPermissionReturn=false
+    private var sleepResume=SleepResumePolicy()
+    private let powerLog=Logger(subsystem:"io.github.vibecompanion.mac",category:"power")
     func applicationDidFinishLaunching(_ notification:Notification) {
         guard !CommandLine.arguments.contains("--self-test") else { return }
         let preview=CommandLine.arguments.contains("--preview-ui") || Bundle.main.bundleIdentifier?.hasSuffix(".preview")==true
@@ -12,9 +15,10 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
         permissionReloaded=resumed != nil
         let peers=NSRunningApplication.runningApplications(withBundleIdentifier:Bundle.main.bundleIdentifier ?? "io.github.vibecompanion.mac")
         if !preview,resumed==nil,let existing=peers.first(where:{$0.processIdentifier != ProcessInfo.processInfo.processIdentifier}) { existing.activate(options:[.activateAllWindows]);NSApp.terminate(nil);return }
-        let m=AppModel(preview:preview);model=m
+        let m=AppModel(preview:preview,connectionPaused:resumed?.connectionPaused ?? false);model=m
         if let resumed=resumed { m.restore(resumed);m.result="快捷键授权已重新载入" }
         m.onPermissionRequested={ [weak self] in self?.permissionReloaded=false;self?.awaitingPermissionReturn=true }
+        m.onConnectionRequested={ [weak self] in self?.resumeForUserInteraction() }
         let main=NSMenu()
         let application=NSMenuItem();let applicationMenu=NSMenu();application.submenu=applicationMenu
         applicationMenu.addItem(withTitle:"关于 Vibe 伴侣",action:#selector(NSApplication.orderFrontStandardAboutPanel(_:)),keyEquivalent:"")
@@ -41,16 +45,20 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
     func applicationDidResignActive(_ notification:Notification) { permissionReloaded=false }
     func windowDidBecomeKey(_ notification:Notification) { refreshPermission() }
     private func refreshPermission() {
-        guard let m=model,!m.preview,!permissionProbeRunning else { return }
+        guard !sleepResume.waitingForWake,let m=model,!m.preview,!permissionProbeRunning else { return }
         // PostEvent preflight can cache both grants and denials. Check a fresh
         // process even when this instance still reports an old grant.
         guard !permissionReloaded else { m.engine.retry(resume:false);return } // One reload per activation.
         permissionProbeRunning=true;m.permissionChecking=true
+        let powerGeneration=sleepResume.generation
         DispatchQueue.global(qos:.utility).async { [weak self] in
             let granted=PermissionProbe.check()
             DispatchQueue.main.async {
                 guard let self=self,let m=self.model else { return }
                 self.permissionProbeRunning=false;m.permissionChecking=false
+                guard self.sleepResume.acceptsCompletion(from:powerGeneration) else {
+                    self.refreshPermission();return
+                }
                 guard PermissionRecoveryPolicy.shouldReload(current:Shortcut.permitted,fresh:granted,returnedFromSettings:self.awaitingPermissionReturn,alreadyReloaded:self.permissionReloaded) else {
                     if Shortcut.permitted { self.awaitingPermissionReturn=false }
                     m.engine.retry(resume:false);return
@@ -64,25 +72,49 @@ final class AppDelegate:NSObject,NSApplicationDelegate,NSWindowDelegate {
         }
     }
     private func reloadAfterPermission() {
+        guard !sleepResume.waitingForWake else { return }
         guard let m=model,let id=PermissionSessionStore.save(m.permissionSession(visible:awaitingPermissionReturn || window?.isVisible==true)) else {
             model?.result="授权已开启，但无法保留当前草稿；请保存后重新打开应用";return
         }
         permissionReloaded=true;awaitingPermissionReturn=false;m.permissionChecking=true;m.result="正在重新检测快捷键…"
+        let powerGeneration=sleepResume.generation
         m.engine.stop { [weak self] in
+            guard let self=self else { PermissionSessionStore.discard(id);return }
+            guard self.sleepResume.acceptsCompletion(from:powerGeneration) else {
+                PermissionSessionStore.discard(id);self.permissionReloaded=false
+                m.permissionChecking=false;m.result="";self.refreshPermission();return
+            }
             if PermissionRelaunch.schedule(resumeID:id) { NSApp.terminate(nil) }
             else {
-                PermissionSessionStore.discard(id);self?.model?.permissionChecking=false
-                self?.model?.result="无法重新载入快捷键权限，请稍后重试";self?.model?.engine.start()
+                PermissionSessionStore.discard(id);self.model?.permissionChecking=false
+                self.model?.result="无法重新载入快捷键权限，请稍后重试";self.model?.engine.start()
             }
         }
     }
 
     func windowWillClose(_ notification:Notification) { NSApp.hide(nil) }
     @objc func closeWindow() { window?.performClose(nil) }
-    @objc func show() { NSApp.unhide(nil);window?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true);refreshPermission() }
+    @objc func show() { resumeForUserInteraction();NSApp.unhide(nil);window?.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true);refreshPermission() }
     @objc func quit() { NSApp.terminate(nil) }
-    @objc func willSleep() { model?.engine.stop() }
-    @objc func didWake() { if model?.preview != true { model?.engine.start() } }
+    @objc func willSleep() {
+        powerLog.notice("System sleep: suspending device links and quota polling")
+        sleepResume.willSleep();model?.agents.quota.suspend();model?.engine.suspendForSleep()
+    }
+    @objc func didWake() {
+        let resume=sleepResume.didWake()
+        powerLog.notice("System wake resumeLinks=\(resume)")
+        if resume { resumeDeviceWork() }
+    }
+    private func resumeForUserInteraction() {
+        if sleepResume.userRequestedResume() {
+            powerLog.notice("User interaction: resuming device links and quota polling")
+            resumeDeviceWork()
+        }
+    }
+    private func resumeDeviceWork() {
+        guard let model=model,!model.preview else { return }
+        model.agents.quota.resume();model.engine.resumeAfterSleep();refreshPermission()
+    }
     func applicationWillTerminate(_ notification:Notification) { model?.engine.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool { false }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows:Bool)->Bool { show();return true }

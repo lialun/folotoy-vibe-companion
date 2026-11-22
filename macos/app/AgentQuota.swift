@@ -111,24 +111,56 @@ struct AgentQuotaActivity:Codable {
     var created=Date().timeIntervalSince1970
 }
 
+// Reserve a polling interval while a request is running. A cancelled request
+// restores its previous deadline; completed polls and real failures retain it.
+struct QuotaPollSchedule {
+    private(set) var next=Date.distantPast,inFlight=false,failures=0
+    private var previous=Date.distantPast
+    mutating func begin(now:Date)->Bool {
+        guard !inFlight,now>=next else {return false}
+        previous=next;next=now.addingTimeInterval(AgentQuotaSample.interval);inFlight=true;return true
+    }
+    mutating func cancel() {
+        guard inFlight else {return};next=previous;inFlight=false
+    }
+    mutating func finish(success:Bool,now:Date) {
+        guard inFlight else {return};inFlight=false
+        if success {failures=0}
+        else {failures=min(3,failures+1);next=now.addingTimeInterval(AgentQuotaTiming.retry(failures))}
+    }
+}
+
 // Main-queue owner. No login, Keychain prompt, browser access or paid model calls.
 final class AgentQuotaCenter {
     private let log=Logger(subsystem:"io.github.vibecompanion.mac",category:"agent-quota")
     private var timer:DispatchSourceTimer?
     private var installed:Set<AgentID>=[]
     private var lastActivity:[AgentID:Date]=[:]
-    private var next:[AgentID:Date]=[:],failures:[AgentID:Int]=[:],busy:Set<AgentID>=[]
+    private var next:[AgentID:Date]=[:]
+    private var codexSchedule=QuotaPollSchedule()
     private var pendingClaude:AgentQuotaSample?
     private(set) var samples:[AgentID:AgentQuotaSample]=[:]
     private var codexExecutable:URL?
     private var stopped=false,codexEndedAt=Date.distantPast,scanning=false,nextScan=Date.distantPast
+    private var workCancellation=QuotaProbeCancellation()
     var onChange:(([AgentQuotaSample])->Void)?
     func configure(_ rows:[AgentIntegration]) {
         installed=Set(rows.filter{$0.installed}.map{$0.agent});codexExecutable=rows.first{$0.agent == .codex}?.executable
         samples=samples.filter{$0.key.isCustom || installed.contains($0.key)};if !installed.contains(.claude){pendingClaude=nil};publish()
-        guard timer==nil else{return}
+        startTimer()
+    }
+    private func startTimer() {
+        guard !stopped,timer==nil else{return}
         let timer=DispatchSource.makeTimerSource(queue:.main);timer.schedule(deadline:.now(),repeating:10)
         timer.setEventHandler{[weak self] in self?.tick()};self.timer=timer;timer.resume()
+    }
+    func suspend() {
+        stopped=true;timer?.cancel();timer=nil;workCancellation.cancel()
+        codexSchedule.cancel();scanning=false;nextScan = .distantPast
+    }
+    func resume(now:Date=Date()) {
+        if stopped { workCancellation=QuotaProbeCancellation() }
+        stopped=false;startTimer();tick(now:now)
     }
     func activity(_ activity:AgentQuotaActivity,now:Date=Date()) {
         guard installed.contains(activity.agent),abs(now.timeIntervalSince1970-activity.created)<15,activity.session.count==64 else{return}
@@ -166,10 +198,12 @@ final class AgentQuotaCenter {
         // Bounded metadata reads run off the UI queue and at most twice a minute.
         if installed.contains(.codex),!scanning,now>=nextScan {
             scanning=true;nextScan=now.addingTimeInterval(30)
+            let cancellation=workCancellation
             DispatchQueue.global(qos:.utility).async { [weak self] in
-                let date=Self.codexActivity(now:now)
+                guard !cancellation.isCancelled else { return }
+                let date=Self.codexActivity(now:now,cancellation:cancellation)
                 DispatchQueue.main.async {
-                    guard let self=self else{return};self.scanning=false
+                    guard let self=self,!self.stopped,self.workCancellation===cancellation else{return};self.scanning=false
                     if self.installed.contains(.codex),let date=date,now.timeIntervalSince(date)<600,date>self.codexEndedAt.addingTimeInterval(3) {
                         self.lastActivity[.codex]=max(self.lastActivity[.codex] ?? .distantPast,date)
                     }
@@ -178,36 +212,39 @@ final class AgentQuotaCenter {
             }
         }
         guard installed.contains(.codex),let executable=codexExecutable,
-              AgentQuotaTiming.due(now:now,lastActivity:lastActivity[.codex],next:next[.codex] ?? .distantPast,busy:busy.contains(.codex)) else{return}
-        busy.insert(.codex);next[.codex]=now.addingTimeInterval(AgentQuotaSample.interval)
+              AgentQuotaTiming.due(now:now,lastActivity:lastActivity[.codex],next:codexSchedule.next,busy:codexSchedule.inFlight),
+              codexSchedule.begin(now:now) else{return}
+        let cancellation=workCancellation
         DispatchQueue.global(qos:.utility).async { [weak self] in
-            let result=Result{try CodexQuotaProbe.read(executable:executable)}
+            let result=Result{try CodexQuotaProbe.read(executable:executable,cancellation:cancellation)}
             DispatchQueue.main.async {
-                guard let self=self else{return};self.busy.remove(.codex)
-                guard !self.stopped,self.installed.contains(.codex) else{return}
+                guard let self=self,self.workCancellation===cancellation else{return}
+                guard !self.stopped else{return}
+                guard self.installed.contains(.codex) else {self.codexSchedule.cancel();return}
                 switch result {
-                case .success(let sample):self.failures[.codex]=0;self.accept(sample)
+                case .success(let sample):self.codexSchedule.finish(success:true,now:Date());self.accept(sample)
                 case .failure:
-                    let failure=min(3,(self.failures[.codex] ?? 0)+1);self.failures[.codex]=failure
-                    self.next[.codex]=Date().addingTimeInterval(AgentQuotaTiming.retry(failure))
+                    self.codexSchedule.finish(success:false,now:Date())
                     self.log.notice("Codex quota unavailable; background retry deferred")
                 }
             }
         }
     }
-    static func codexActivity(now:Date=Date())->Date? {
+    static func codexActivity(now:Date=Date(),cancellation:QuotaProbeCancellation?=nil)->Date? {
         let home=AgentInstaller.home("CODEX_HOME",".codex").appendingPathComponent("sessions")
         let format=DateFormatter();format.timeZone=TimeZone(secondsFromGMT:0);format.dateFormat="yyyy/MM/dd"
         var latest:Date?
         for offset in [0.0,-86400.0] {
+            if cancellation?.isCancelled==true { return nil }
             let directory=home.appendingPathComponent(format.string(from:now.addingTimeInterval(offset)))
             let files=(try? FileManager.default.contentsOfDirectory(at:directory,includingPropertiesForKeys:[.contentModificationDateKey,.isRegularFileKey],options:.skipsHiddenFiles)) ?? []
             for file in files.filter({$0.pathExtension=="jsonl"}).sorted(by:{$0.lastPathComponent>$1.lastPathComponent}).prefix(64) {
+                if cancellation?.isCancelled==true { return nil }
                 guard let v=try? file.resourceValues(forKeys:[.contentModificationDateKey,.isRegularFileKey]),v.isRegularFile==true,let date=v.contentModificationDate,date<=now.addingTimeInterval(5) else{continue}
                 latest=max(latest ?? .distantPast,date)
             }
         }
         return latest
     }
-    deinit {timer?.cancel()}
+    deinit {timer?.cancel();workCancellation.cancel()}
 }

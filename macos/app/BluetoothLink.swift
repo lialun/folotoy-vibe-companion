@@ -38,6 +38,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
     var radioWithoutResponse:Bool {rx?.properties.contains(.writeWithoutResponse) ?? false}
     var queuedWrites:Int {frames.count}
     private var notificationReady=false,lastReceived=Date.distantPast
+    private var enabled=true
     private var retries:[String:BLEConnectionRetry]=[:]
     private var writeLogCount=0,readLogCount=0,frameLogCount=0,packetLogCount=0
     private var frames=BLEWriteBuffer(),writing=false,sequence:UInt8=0,decoder=BLEFrame(),generation=0
@@ -56,9 +57,11 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
     }
     init(queue:DispatchQueue) { self.queue=queue;super.init();central=CBCentralManager(delegate:self,queue:queue) }
     func scan() {
+        guard enabled else { return }
         if central.state == .poweredOn && !central.isScanning { central.scanForPeripherals(withServices:[Self.service],options:[CBCentralManagerScanOptionAllowDuplicatesKey:true]) }
     }
     func connect(_ id:String,resetBackoff:Bool=false) {
+        guard enabled else { return }
         guard let peripheral=peripherals[id] else { return }
         if resetBackoff { retries[id]=BLEConnectionRetry();onPairingRepairChanged?(id,false) }
         if selected?.identifier==peripheral.identifier { return }
@@ -77,6 +80,23 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         if let selected=selected { central.cancelPeripheralConnection(selected) }
         selected=nil;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame()
         notificationReady=false;lastReceived = .distantPast
+    }
+    func disconnect(after delay:TimeInterval,when allowed:@escaping ()->Bool) {
+        let expected=generation
+        queue.asyncAfter(deadline:.now()+delay) { [weak self] in
+            guard let self=self,self.enabled,self.generation==expected,allowed() else {return}
+            self.disconnect()
+        }
+    }
+    func shutdown() {
+        // Cancel discovery as well as the selected peripheral. Otherwise an
+        // advertisement already queued during sleep can reconnect the device.
+        enabled=false;central.stopScan();central.delegate=nil
+        selected?.delegate=nil
+        disconnect()
+        onFound=nil;onPacket=nil;onReady=nil;onDisconnected=nil
+        onAuthenticationFailed=nil;onStatus=nil;onPairingRepairChanged=nil
+        peripherals.removeAll()
     }
     private func failed(_ message:String,pairingLost:Bool=false) {
         let id=device;disconnect();retries[id,default:BLEConnectionRetry()].failed(Date())
@@ -104,7 +124,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         if let peripheral=selected,let rx=rx {writeNext(peripheral,rx)}
     }
     private func writeNext(_ peripheral:CBPeripheral,_ characteristic:CBCharacteristic) {
-        guard !writing else { return }
+        guard enabled,!writing else { return }
         while let frame=frames.first {
             if frames.firstIsRadio,Date()<radioNextWrite {
                 if !radioWriteScheduled {
@@ -126,6 +146,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         }
     }
     func centralManagerDidUpdateState(_ central:CBCentralManager) {
+        guard enabled else { return }
         switch central.state {
         case .poweredOn:onStatus?("");scan()
         case .poweredOff:onStatus?("蓝牙已关闭")
@@ -136,6 +157,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         if central.state != .poweredOn { disconnect() }
     }
     func centralManager(_ central:CBCentralManager,didDiscover peripheral:CBPeripheral,advertisementData:[String:Any],rssi RSSI:NSNumber) {
+        guard enabled else { return }
         let name=advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? ""
         guard name.hasPrefix("Vibe-") else { return }
         let id=String(name.dropFirst(5)).lowercased()

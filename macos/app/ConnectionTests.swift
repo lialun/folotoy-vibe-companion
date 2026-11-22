@@ -3,6 +3,29 @@ import Darwin
 
 enum ConnectionTests {
     static func run(_ check:(Bool,String)->Void) {
+        var sleep=SleepResumePolicy()
+        let beforeSleep=sleep.generation
+        check(sleep.acceptsCompletion(from:beforeSleep),"permission work can complete within an awake session")
+        check(!sleep.resume(.display),"ordinary display wake does not restart a running engine")
+        sleep.willSleep()
+        check(!sleep.acceptsCompletion(from:beforeSleep),"permission callbacks cannot relaunch the app during sleep")
+        check(!sleep.resume(.display),"display wake cannot substitute for a system wake")
+        check(!sleep.resume(.backgroundMaintenance) && sleep.waitingForWake,"background maintenance keeps device traffic suspended")
+        check(sleep.didWake() && !sleep.waitingForWake,"a system wake resumes work without requiring any display")
+        check(!sleep.acceptsCompletion(from:beforeSleep) && sleep.acceptsCompletion(from:sleep.generation),"old permission callbacks remain invalid after wake; new probes are permitted")
+        check(!sleep.didWake() && !sleep.resume(.display),"duplicate system and screen wakes cannot create extra BLE managers")
+        for _ in 0..<20 {
+            sleep.willSleep()
+            check(sleep.didWake(),"normal wake resumes across repeated sleep cycles")
+        }
+        sleep.willSleep()
+        check(sleep.userRequestedResume() && !sleep.userRequestedResume(),"explicit user connection recovers a missing system notification only once")
+        let lifecycle=EngineLifecycle();lifecycle.userPaused=true;lifecycle.suspend()
+        let oldResume=lifecycle.requestResume();lifecycle.suspend()
+        check(!lifecycle.completeResume(oldResume) && lifecycle.isSuspended,"late wake work cannot undo a more recent sleep")
+        let newResume=lifecycle.requestResume()
+        check(lifecycle.completeResume(newResume) && !lifecycle.isSuspended && lifecycle.userPaused,"wake keeps explicit disconnect intent")
+        Engine.testSleepLifecycle(check)
         check(ConnectionTiming.linkFresh<ConnectionTiming.voiceTimeout && ConnectionTiming.voiceTimeout<ConnectionTiming.sessionTimeout,"transport fallback precedes voice expiry and session disconnect")
         check(ConnectionTiming.voiceTimeout<ConnectionTiming.bleSilenceTimeout && ConnectionTiming.bleSilenceTimeout<ConnectionTiming.sessionTimeout,"stalled BLE recovers after safe voice release and before logical session expiry")
         var writes=BLEWriteBuffer()

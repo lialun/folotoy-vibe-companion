@@ -99,6 +99,27 @@ The device honors a BLE preference only while that link is fresh, and otherwise
 uses fresh Wi-Fi. Older peers without the field retain automatic selection.
 
 
+## Computer sleep
+
+System sleep immediately blocks new device work and releases held shortcut keys.
+BLE scanning, connections, LAN sockets, voice/radio audio and timing activity are
+then stopped on their owning queue. The notification handler does not wait for
+that queue, audio drivers or subprocess startup. Transport shutdown precedes
+audio disposal. Queued timers and old permission callbacks cannot restart work.
+
+The app uses `NSWorkspace.didWakeNotification` for system wake, independently of
+displays. Screen-only sleep/wake does not change the connection, and background
+maintenance does not resume it. Opening the app or explicitly connecting can
+recover a missed wake notification. Repeated wakes do not create extra Bluetooth
+managers. Authorization, settings drafts and manual disconnect intent survive
+sleep and automatic permission relaunch. Voice never restarts by itself; radio
+reconnects only if the device still requests playback.
+
+Quota polling cancels its owned subprocess without holding a lock across process
+startup. A poll interrupted by sleep becomes eligible again on wake while the
+source is recently active. Successful polls retain the five-minute interval,
+genuine failures retain backoff, and cached observations keep their original age.
+
 ## Acceptance
 
 Host tests cover identity merging, dual attachment, fallback, denial, expiry,

@@ -78,21 +78,42 @@ final class Shortcut {
         }
     }
     private var pressed:[CGKeyCode]=[], flags:Set<CGKeyCode>=[]
-    func post(_ code:CGKeyCode,down:Bool) {
+    private let stateLock=NSLock()
+    private var sleeping=false
+    private let permissionCheck:()->Bool
+    private let eventSink:((CGKeyCode,Bool,UInt64)->Void)?
+    init(permissionCheck:@escaping ()->Bool={Shortcut.permitted},eventSink:((CGKeyCode,Bool,UInt64)->Void)?=nil) {
+        self.permissionCheck=permissionCheck;self.eventSink=eventSink
+    }
+    private func post(_ code:CGKeyCode,down:Bool) {
         if Self.modifiers[code] != nil { if down { flags.insert(code) } else { flags.remove(code) } }
+        let rawFlags=flags.reduce(UInt64(0)) { $0 | (Self.modifiers[$1] ?? 0) }
+        if let eventSink=eventSink {eventSink(code,down,rawFlags);return}
         guard let e=CGEvent(keyboardEventSource:nil,virtualKey:code,keyDown:down) else { return }
-        e.flags=CGEventFlags(rawValue:flags.reduce(UInt64(0)) { $0 | (Self.modifiers[$1] ?? 0) })
+        e.flags=CGEventFlags(rawValue:rawFlags)
         if Self.modifiers[code] != nil { e.type = .flagsChanged }
         e.post(tap:.cghidEventTap)
     }
-    func start(_ spec:String) throws {
-        guard pressed.isEmpty else { return }
-        guard Self.permitted else { throw ShortcutError.permission }
+    @discardableResult func start(_ spec:String) throws->Bool {
+        stateLock.lock();defer{stateLock.unlock()}
+        guard !sleeping else {return false}
+        guard pressed.isEmpty else { return true }
+        guard permissionCheck() else { throw ShortcutError.permission }
         for code in try Self.resolve(spec) { pressed.append(code); post(code,down:true) }
+        return true
     }
-    func stop() { for code in pressed.reversed() { post(code,down:false) }; pressed=[]; flags=[] }
+    private func releaseKeys() { for code in pressed.reversed() { post(code,down:false) }; pressed=[]; flags=[] }
+    func stop() {stateLock.lock();defer{stateLock.unlock()};releaseKeys()}
+    func suspendForSleep() {
+        stateLock.lock();defer{stateLock.unlock()}
+        sleeping=true;releaseKeys()
+    }
+    func resume(if allowed:()->Bool={true}) {
+        stateLock.lock();defer{stateLock.unlock()};if allowed() {sleeping=false}
+    }
     func enter() {
-        guard Self.permitted, pressed.isEmpty else { return }
+        stateLock.lock();defer{stateLock.unlock()}
+        guard !sleeping,permissionCheck(), pressed.isEmpty else { return }
         post(36,down:true); Thread.sleep(forTimeInterval:0.04); post(36,down:false)
     }
     deinit { stop() }

@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     @Published var loaded=false
     @Published var permissionChecking=false
     var onPermissionRequested:(()->Void)?
+    var onConnectionRequested:(()->Void)?
     private var confirmedSettings:DeviceSettings?
     private var requestedDevice:String?
     @Published var shortcut=UserDefaults.standard.string(forKey:"shortcut") ?? "ctrl+option+v"
@@ -51,7 +52,8 @@ final class AppModel: ObservableObject {
     func permissionSession(visible:Bool)->PermissionSession {
         PermissionSession(settings:settings,confirmed:confirmedSettings,loaded:loaded,shortcut:shortcut,cityQuery:cityQuery,
             stations:radioStations,baseline:radioBaseline,revision:radioRevision,capacity:radioCapacity,radioLoaded:radioLoaded,
-            query:radioQuery,chineseOnly:radioChineseOnly,source:radioSource,customName:customName,customURL:customURL,tab:tab,visible:visible)
+            query:radioQuery,chineseOnly:radioChineseOnly,source:radioSource,customName:customName,customURL:customURL,tab:tab,visible:visible,
+            connectionPaused:engine.connectionPaused)
     }
     func restore(_ session:PermissionSession) {
         settings=session.settings;confirmedSettings=session.confirmed;loaded=session.loaded
@@ -60,11 +62,11 @@ final class AppModel: ObservableObject {
         radioQuery=session.query;radioChineseOnly=session.chineseOnly;radioSource=session.source
         customName=session.customName;customURL=session.customURL;tab=session.tab
     }
-    init(preview:Bool=false) {
+    init(preview:Bool=false,connectionPaused:Bool=false) {
         self.preview=preview
         if !preview { _=Shortcut.permitted }
         agents=AgentCenter(preview:preview)
-        engine=Engine(preview:preview)
+        engine=Engine(preview:preview,connectionPaused:connectionPaused)
         agents.deliverQuota={ [weak self] samples in self?.engine.updateAgentQuotas(samples) }
         agents.deliver={ [weak self] event in self?.engine.notifyAgent(event) }
         engine.onAgentResult={ [weak self] message in self?.agents.message=message }
@@ -182,11 +184,14 @@ final class AppModel: ObservableObject {
         (confirmedSettings.map { !settings.changes(comparedTo:$0).isEmpty } ?? false) || (radioLoaded && radioStations != radioBaseline)
     }
     func selectDevice(_ id:String,via transport:ConnectionTransport?=nil) {
+        onConnectionRequested?()
         if id==state.device { engine.selectDevice(id,via:transport);return }
         requestedDevice=id;loaded=false;confirmedSettings=nil;settings=DeviceSettings();radioLoaded=false
         radioStations=[];radioBaseline=[];radioRevision=0;radioLoading=false;code="";result="";saving=false
         engine.selectDevice(id,via:transport)
     }
+    func retryConnection() {onConnectionRequested?();engine.retry()}
+    func retryBluetooth() {onConnectionRequested?();engine.retryBluetooth()}
     func saveShortcut() {
         guard !preview else { result="这是界面预览，快捷键不会修改";return }
         do { try engine.setShortcut(shortcut);result="快捷键已保存，请在输入法中使用相同的「按住说话」快捷键" }

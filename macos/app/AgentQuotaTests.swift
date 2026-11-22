@@ -2,7 +2,22 @@ import Foundation
 
 enum AgentQuotaTests {
     static func run(_ check:(Bool,String)->Void) {
+        CodexQuotaProbeTests.run(check)
         let now=Date(timeIntervalSince1970:1790000000),owner="synthetic-owner"
+        var schedule=QuotaPollSchedule()
+        check(schedule.begin(now:now) && !schedule.begin(now:now),"one active quota poll reserves its interval")
+        schedule.cancel()
+        check(schedule.begin(now:now.addingTimeInterval(10)),"sleep-cancelled quota poll can retry promptly after wake")
+        schedule.finish(success:true,now:now.addingTimeInterval(11));schedule.cancel()
+        check(!schedule.begin(now:now.addingTimeInterval(100)) && schedule.next==now.addingTimeInterval(310),"sleep preserves a completed poll's five-minute interval")
+        check(schedule.begin(now:now.addingTimeInterval(310)),"completed query becomes due on its original schedule")
+        schedule.finish(success:false,now:now.addingTimeInterval(311));schedule.cancel()
+        check(schedule.failures==1 && !schedule.begin(now:now.addingTimeInterval(500)),"sleep preserves genuine quota failure backoff")
+        check(schedule.begin(now:now.addingTimeInterval(911)),"backoff eventually permits a query")
+        schedule.cancel()
+        check(schedule.failures==1 && schedule.begin(now:now.addingTimeInterval(912)),"cancelling a retry adds neither a new cooldown nor a false failure")
+        schedule.finish(success:true,now:now.addingTimeInterval(913))
+        check(schedule.failures==0,"successful recovery resets failure count")
         check(AgentQuotaTiming.due(now:now,lastActivity:now,next:.distantPast,busy:false),"first active observation queries promptly")
         check(!AgentQuotaTiming.due(now:now.addingTimeInterval(299),lastActivity:now,next:now.addingTimeInterval(300),busy:false),"repeated use cannot bypass five-minute query cooldown")
         check(!AgentQuotaTiming.due(now:now.addingTimeInterval(600),lastActivity:now,next:.distantPast,busy:false),"idle source stops after ten minutes")
@@ -35,6 +50,12 @@ enum AgentQuotaTests {
         check(center.samples[.claude]?.id==first.id,"frequent statusline observations coalesce within five minutes")
         center.tick(now:now.addingTimeInterval(300))
         check(center.samples[.claude]?.id==newer.id && center.samples[.claude]?.captured==newer.captured,"coalesced statusline uses its original capture time, not delivery time")
+        center.suspend()
+        center.tick(now:now.addingTimeInterval(2000))
+        check(center.samples[.claude]?.id==newer.id,"sleep suspends quota timer work")
+        center.resume(now:now.addingTimeInterval(2000))
+        check(center.samples.isEmpty,"wake expires old quota observations without renewing their lifetime")
+        center.suspend()
         let temp=FileManager.default.temporaryDirectory.appendingPathComponent("vibe-quota-tests-"+UUID().uuidString)
         try! FileManager.default.createDirectory(at:temp,withIntermediateDirectories:true);defer{try? FileManager.default.removeItem(at:temp)}
         let backup=temp.appendingPathComponent("original.json")

@@ -84,7 +84,7 @@ struct CompanionView:View {
             }
             card("语音通道","waveform") {
                 readiness("音频驱动",detail:model.state.audio ? "BlackHole 2ch" : "尚未检测到 BlackHole 2ch",ready:model.state.audio) {
-                    Button("重新检测") { model.engine.retry() }
+                    Button("重新检测") { model.retryConnection() }
                 }
                 audioSetup
                 Divider().overlay(Palette.line)

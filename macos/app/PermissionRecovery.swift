@@ -28,6 +28,7 @@ struct PermissionSession:Codable {
     var revision:Int,capacity:Int,radioLoaded:Bool
     var query:String,chineseOnly:Bool,source:Int,customName:String,customURL:String
     var tab:Int,visible:Bool
+    var connectionPaused:Bool?=nil
 }
 
 enum PermissionSessionStore {
