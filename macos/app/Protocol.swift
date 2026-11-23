@@ -66,10 +66,11 @@ struct DeviceSettings: Codable, Equatable {
 }
 
 enum Packet {
-    case audio(sequence: UInt8, samples: [Int16]), event([String:Any]), ping
+    case audio(sequence: UInt8, samples: [Int16]), voice(VoiceFrame), event([String:Any]), ping
     static func parse(_ data: Data) -> Packet? {
         guard let type=data.first else { return nil }
         if type==4 && data.count==1 { return .ping }
+        if type==6 {return VoiceFrame.parse(data).map{.voice($0)}}
         if type==1 {
             guard data.count==807, data[2]==0x80, let pcm=VoiceCodec.decode(data.subdata(in: 3..<807)) else { return nil }
             return .audio(sequence:data[1],samples:pcm)

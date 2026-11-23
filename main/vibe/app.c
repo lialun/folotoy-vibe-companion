@@ -222,6 +222,8 @@ static void receive_json(const char *s) {
         if (integer(o,"idleHeartbeat",&seconds,5,30)) v_status.heartbeat_ms=vibe_peer_interval(seconds);
         v_status.audio_ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"audioReady"));
         v_status.hotkey_ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"hotkeyReady"));
+        const cJSON *voice=cJSON_GetObjectItemCaseSensitive(o,"voiceV2");
+        v_status.voice_v2=cJSON_IsNumber(voice) && voice->valuedouble==1;
         bool had_radio_pcm=v_status.radio_pcm;
         unsigned radio_formats=0;
         v_status.radio_pcm=integer(o,"radioFormats",&radio_formats,0,255) && (radio_formats&(1u<<(V_RADIO_FORMAT-1)));

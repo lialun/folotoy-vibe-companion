@@ -31,6 +31,8 @@ static void test_pcm_release(void *ptr) { assert(ptr && pcm_live==1);--pcm_live;
 static unsigned starts,ends,packets,writes,failures,wakes,radios;
 static uint64_t now;
 static wifi_ps_type_t power_save=WIFI_PS_MIN_MODEM;
+uint32_t esp_random(void) {static uint32_t nonce=1;return nonce++;}
+uint32_t vibe_network_generation(void) {return 7;}
 
 uint64_t vibe_now(void) { return now; }
 void vibe_snapshot(vibe_model_t *m,vibe_prefs_t *p,vibe_status_t *s) {
@@ -94,6 +96,10 @@ void vibe_send_json(const char *json) {
 }
 int vibe_send_audio(const void *bytes,size_t length) {
     assert(bytes && length==ADPCM_BLOCK_BYTES+2); ++packets; return 0;
+}
+int vibe_send_voice(const void *bytes,size_t length,uint32_t owner) {
+    const uint8_t *p=bytes;assert(v_status.voice_v2 && owner==7 && length==VIBE_VOICE_BODY);
+    assert(p[0] && p[8]==0 && p[9]==0 && p[10]==0 && p[11]==0);++packets;return 0;
 }
 void vibe_radio_url(char *url,unsigned capacity) { snprintf(url,capacity,"http://test/radio"); }
 void vibe_radio_status(unsigned state,const char *detail) { (void)detail; v_status.radio_state=state; }
@@ -161,6 +167,8 @@ int main(void) {
     assert(failures==2 && !v_model.recording && pcm_live==1 && starts==9);
     v_model.recording=true;process_audio(V_START_AUDIO);
     assert(starts==10 && ends==10 && pcm_live==1 && pcm_peak==1 && !background_paused);
+    v_status.voice_v2=true;v_model.recording=true;process_audio(V_START_AUDIO);
+    assert(starts==11 && ends==11 && pcm_live==1 && pcm_peak==1 && !background_paused);
     test_pcm_release(capture_pcm);capture_pcm=NULL;
     puts("Application audio: resident voice buffer, boot rollback, capture under heap pressure, wake/read retry and radio lifecycle PASS");
 }

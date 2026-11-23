@@ -90,7 +90,9 @@ Its seven-byte header contains `0x56`, message ID, start/end flags, little-endia
 length and offset. Assembly is capped at 1537 bytes and two seconds. LAN and BLE
 share application authorization; attaching a link does not change the session
 generation. A computer handover invalidates queued commands from the old generation.
-Audio uses one primary link. Critical voice/button events mirror the same
+Legacy audio uses one primary link. Negotiated V2 voice duplicates both paths
+and merges on the computer.
+Critical voice/button events mirror the same
 event ID over both authorized links; the desktop deduplicates before acting.
 Audio sequences provide loss/duplicate checks.
 
@@ -102,6 +104,9 @@ uses fresh Wi-Fi. Older peers without the field retain automatic selection.
 
 
 ## Transport stability and congestion
+
+Audio-only switching below applies to legacy recordings. V2 already uses both
+paths and retains control-silence/disconnect failover.
 
 A recovered heartbeat does not preempt a working link. With a backup that has
 received authenticated traffic within three seconds, the desktop changes the

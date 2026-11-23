@@ -2,13 +2,16 @@
 #include "radio/catalog_service.h"
 #include "radio/remote.h"
 #include "adpcm.h"
+#include "voice_wire.h"
 #include "ui_sfx.h"
 #include "bsp_audio.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "freertos/task.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static TaskHandle_t worker;
 static int16_t *capture_pcm;
@@ -64,27 +67,35 @@ static void capture(int16_t *pcm) {
     if (!m.recording || !m.voice_ready) return;
     esp_wifi_set_ps(WIFI_PS_NONE);
     bool started=false,failed=false;unsigned captured=0,send_drops=0;
+    const bool v2=s.voice_v2;
+    const uint32_t owner=vibe_network_generation();
+    uint64_t session=((uint64_t)esp_random()<<32)|esp_random();if (!session) session=1;
+    char event[192];
     uint64_t began=vibe_now();
     if (prepare_audio("capture") && bsp_audio_set_format(16000,16,1)==ESP_OK && bsp_audio_set_input_gain(p.mic_gain)==ESP_OK) {
         bsp_audio_set_volume(0); /* I2S duplex clocks remain active; no speaker feedback. */
         portENTER_CRITICAL(&request_mux);uint64_t requested=voice_requested_at;portEXIT_CRITICAL(&request_mux);
         if (requested) ESP_LOGI(TAG,"Voice capture ready: latency_ms=%llu",(unsigned long long)(vibe_now()-requested));
-        vibe_send_json("{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\"}");
+        if (v2) {
+            snprintf(event,sizeof(event),"{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\"}",(unsigned long long)session);
+            vibe_send_json(event);
+        } else vibe_send_json("{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\"}");
         started=true;
         /* Give the Mac time to press the shortcut before the first 100ms block. */
         vTaskDelay(pdMS_TO_TICKS(80));
-        adpcm_state_t state; adpcm_state_reset(&state); uint8_t sequence=0;
-        uint8_t packet[ADPCM_BLOCK_BYTES+2]; packet[1]=0x80;
+        adpcm_state_t state; adpcm_state_reset(&state);
+        uint8_t packet[VIBE_VOICE_BODY];const size_t header=v2?VIBE_VOICE_HEADER:2;
         uint64_t start=vibe_now();
         for (;;) {
             vibe_snapshot(&m,NULL,&s);
             if (!m.recording || !m.voice_ready || vibe_now()-start>=180000) break;
             if (bsp_audio_read(pcm,ADPCM_BLOCK_SAMPLES*2)!=ESP_OK) { failed=true; break; }
             /* Keep the last block on normal release so word endings aren't cut. */
-            size_t bytes=adpcm_encode_block(&state,pcm,ADPCM_BLOCK_SAMPLES,packet+2,ADPCM_BLOCK_BYTES);
-            packet[0]=sequence++;
+            size_t bytes=adpcm_encode_block(&state,pcm,ADPCM_BLOCK_SAMPLES,packet+header,ADPCM_BLOCK_BYTES);
+            if (v2) bytes=vibe_voice_encode(session,captured,packet+header,bytes,packet,sizeof(packet));
+            else {packet[0]=(uint8_t)captured;packet[1]=0x80;if(bytes)bytes+=2;}
             ++captured;
-            if (bytes && vibe_send_audio(packet,bytes+2)!=0) {
+            if (!bytes || (v2?vibe_send_voice(packet,bytes,owner):vibe_send_audio(packet,bytes))!=0) {
                 ++send_drops;
                 xSemaphoreTake(v_mutex,portMAX_DELAY); ++v_status.drops; xSemaphoreGive(v_mutex);
             }
@@ -92,8 +103,12 @@ static void capture(int16_t *pcm) {
     } else failed=true;
     if (started) {
         ESP_LOGI(TAG,"Voice TX captured=%u send_drops=%u duration_ms=%llu",captured,send_drops,(unsigned long long)(vibe_now()-began));
-        /* This event and data use one socket; Mac has a 180ms audio-drain grace. */
-        vibe_send_json("{\"event\":\"voice.end\"}");
+        /* V2 binds the terminal count to this recording; a late end from an
+         * earlier recording cannot stop the next one. The Mac drains its FIFO. */
+        if (v2) {
+            snprintf(event,sizeof(event),"{\"event\":\"voice.end\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"frames\":%u}",(unsigned long long)session,captured);
+            vibe_send_json(event);
+        } else vibe_send_json("{\"event\":\"voice.end\"}");
     }
     if (failed) {
         ESP_LOGE(TAG,"Capture failed; next UP press may retry");

@@ -11,6 +11,8 @@ enum NativeTests {
         LANTests.run(check)
         ConnectionTests.run(check)
         ShortcutSleepTests.run(check)
+        VoiceMergeTests.run(check)
+        Engine.testVoiceMerge(check)
         check(VoiceCodec.decode(Data(repeating:0,count:803))==nil,"short ADPCM block")
         var block=Data(repeating:0,count:804);block[2]=89
         check(VoiceCodec.decode(block)==nil,"invalid ADPCM step index")
@@ -154,10 +156,14 @@ enum NativeTests {
         try! Data("invalid".utf8).write(to:file)
         check(PairingStore.load(device,directory:store)==nil,"corrupt local file is not a valid pairing")
         check(PairingStore.save(token,device:device,directory:store) && PairingStore.load(device,directory:store)==token,"fresh pairing repairs a corrupt file")
-        if let i=CommandLine.arguments.firstIndex(of:"--vectors"),CommandLine.arguments.count>i+1,
-           let fixture=try? Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[i+1])),fixture.count==2004 {
+        if let i=CommandLine.arguments.firstIndex(of:"--vectors") {
+            guard CommandLine.arguments.count>i+1,let fixture=try? Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[i+1])),fixture.count==4004 else {check(false,"required C voice vector missing or malformed");return}
             let expected=(0..<1600).map { n -> Int16 in Int16(bitPattern:UInt16(fixture[804+n*2])|UInt16(fixture[805+n*2])<<8) }
             check(VoiceCodec.decode(fixture.prefix(804))==expected,"C / Swift shared waveform vector")
+            if let j=CommandLine.arguments.firstIndex(of:"--voice-v2-vector") {
+                guard CommandLine.arguments.count>j+1,let wire=try? Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[j+1])),let frame=VoiceFrame.parse(wire) else {check(false,"required C V2 wire vector missing or malformed");return}
+                check(frame.session==0x123456789abcdef0 && frame.sequence==256 && VoiceCodec.decode(frame.block)==expected,"C encoder / Swift V2 session framing and waveform match")
+            }
         }
         if CommandLine.arguments.contains("--audio-probe") {
             let sink=AudioSink()

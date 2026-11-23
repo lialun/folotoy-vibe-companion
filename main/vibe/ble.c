@@ -50,6 +50,10 @@ bool vibe_ble_generation_matches(uint16_t handle,uint32_t generation) {
     xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(handle);
     bool current=link && link->generation==generation;xSemaphoreGive(links_mutex);return current;
 }
+uint32_t vibe_ble_generation(uint16_t handle) {
+    xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(handle);
+    uint32_t generation=link?link->generation:0;xSemaphoreGive(links_mutex);return generation;
+}
 static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctx,void *arg) {
     (void)attr;
     if (arg) {
@@ -229,7 +233,7 @@ int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t l
     if (!capacity) { xSemaphoreGive(tx_mutex);return -1; }
     if (capacity>240) capacity=240;
     uint8_t id=++message_id,frame[247];size_t total=length+1;
-    const bool audio=type==1;uint64_t began=vibe_now();
+    const bool audio=type==1 || type==6;uint64_t began=vibe_now();
     for (size_t offset=0;offset<total;) {
         size_t n=total-offset;if (n>capacity) n=capacity;
         frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);

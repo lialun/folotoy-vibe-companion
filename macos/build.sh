@@ -59,13 +59,13 @@ codesign --verify --deep --strict "${app}"
 cc -std=c11 -Wall -Wextra -Werror -I"${root}/main/vibe" \
     "${root}/tests/vibe/test_wire.c" "${root}/main/vibe/adpcm.c" \
     "${root}/main/vibe/protocol.c" -lm -o "${out}/objects/wire-vector"
-"${out}/objects/wire-vector" "${out}/objects/voice-vector.bin"
+"${out}/objects/wire-vector" "${out}/objects/voice-vector.bin" "${out}/objects/voice-v2-vector.bin"
 cc -std=c11 -Wall -Wextra -Werror -I"${root}/main/vibe" \
     "${root}/tests/vibe/test_radio_stream.c" "${root}/main/vibe/adpcm.c" \
     -o "${out}/objects/radio-vector"
 "${out}/objects/radio-vector" "${out}/objects/radio-vector.bin"
 "${app}/Contents/MacOS/VibeCompanion" --self-test --agent-tests
-"${app}/Contents/MacOS/VibeCompanion" --self-test --vectors "${out}/objects/voice-vector.bin" --radio-vector "${out}/objects/radio-vector.bin"
+"${app}/Contents/MacOS/VibeCompanion" --self-test --vectors "${out}/objects/voice-vector.bin" --voice-v2-vector "${out}/objects/voice-v2-vector.bin" --radio-vector "${out}/objects/radio-vector.bin"
 ditto -c -k --sequesterRsrc --keepParent "${app}" "${out}/VibeCompanion-${version}-macOS.zip"
 if [[ "${VIBE_NOTARIZE:-0}" == 1 ]]; then
     : "${VIBE_SIGN_IDENTITY:?Developer ID signing identity is required}"

@@ -52,6 +52,8 @@ The timer uses monotonic deadlines independently of page, network and wall time.
 Timers persist across page switches, not power loss; preferences persist in NVS.
 
 UDP port 33333 retains types 1 audio, 2 JSON event, 3 PC beacon and 4 ping.
+Negotiated type-6 voice adds recording/session framing and a bounded desktop
+merge window; see [Redundant voice uplink](voice-dual-link.md).
 Audio packets are 807 bytes: type, sequence, `0x80`, 804-byte independent IMA
 block, 16 kHz mono / 100 ms. Loss is bounded per block. Critical events repeat
 three times with an event ID; the Mac deduplicates them, including Enter.

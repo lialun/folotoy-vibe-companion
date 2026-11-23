@@ -108,6 +108,9 @@ run_static_checks() {
         tests/vibe/test_wire.c main/vibe/adpcm.c main/vibe/protocol.c -lm \
         -o "${test_dir}/test_vibe_wire"
     "${test_dir}/test_vibe_wire"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread -Imain/vibe \
+        tests/vibe/test_voice_dual.c -o "${test_dir}/test_vibe_voice_dual"
+    "${test_dir}/test_vibe_voice_dual"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
         tests/vibe/test_peer.c -o "${test_dir}/test_vibe_peer"
     "${test_dir}/test_vibe_peer"

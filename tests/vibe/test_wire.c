@@ -1,5 +1,6 @@
 #include "adpcm.h"
 #include "protocol.h"
+#include "voice_wire.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -24,6 +25,11 @@ int main(int argc,char **argv) {
             unsigned v=(uint16_t)decoded[i];fputc(v&255,f);fputc(v>>8,f);
         }
         assert(!fclose(f));
+    }
+    if (argc>2) {
+        uint8_t packet[VIBE_VOICE_BODY+1];packet[0]=VIBE_VOICE_TYPE;
+        assert(vibe_voice_encode(UINT64_C(0x123456789abcdef0),256,encoded,sizeof(encoded),packet+1,sizeof(packet)-1)==VIBE_VOICE_BODY);
+        FILE *f=fopen(argv[2],"wb");assert(f);assert(fwrite(packet,1,sizeof(packet),f)==sizeof(packet));assert(!fclose(f));
     }
     puts("Bounded JSON and firmware ADPCM wire vectors: PASS");
 }

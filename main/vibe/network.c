@@ -3,6 +3,7 @@
 #include "peer.h"
 #include "ble.h"
 #include "ble_ingress.h"
+#include "voice_copy.h"
 #include "radio/remote.h"
 #include "radio/stream.h"
 #include "wifi_profiles.h"
@@ -148,7 +149,7 @@ void vibe_network_commit(const char *client) {
     ++owner_generation;release_after_send=false;
     xSemaphoreGive(peer_mutex);
     v_status.peer_seen_ms=vibe_now();v_status.ble_peer=commit_ble;
-    v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.radio_pcm=false;
+    v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.radio_pcm=false;v_status.voice_v2=false;
 }
 void vibe_send_json(const char *s) {
     if (!tx_queue || strlen(s)>VIBE_JSON_MAX) return;
@@ -187,6 +188,7 @@ static int send_packet(unsigned char type,const void *bytes,size_t n) {
     return result;
 }
 int vibe_send_audio(const void *bytes,size_t n) { return send_packet(1,bytes,n); }
+#include "voice_send.inc"
 /* Credit and lifecycle events must survive a one-way failure of either link.
  * No ownership mutex is held across either networking implementation. */
 void vibe_send_json_both(const char *json) {
@@ -472,7 +474,7 @@ static link_snapshot_t link_snapshot(void) {
 }
 int vibe_discovery_json(char *buffer,size_t capacity,bool authorized,bool auth_checked) {
     link_snapshot_t s=link_snapshot();
-    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"agentQuota\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
+    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"agentQuota\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"voiceV2\":1,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
     return n>0 && (size_t)n<capacity ? n : 0;
 }
 static void hello_to(const struct sockaddr_in *target,bool via_ble,bool authorized,bool auth_checked) {
@@ -604,6 +606,7 @@ static void network_task(void *arg) {
         }
         char metadata[512];int metadata_size=vibe_discovery_json(metadata,sizeof(metadata),false,false);
         if (metadata_size>0) vibe_ble_publish_metadata(metadata,metadata_size);
+        voice_copy_flush();
         static unsigned char packet[VIBE_JSON_MAX+2]; struct sockaddr_in from; socklen_t len=sizeof(from);
         vibe_model_t power;vibe_snapshot(&power,NULL,NULL);
         unsigned wait_ms=(s.audio_busy && power.radio_active && power.radio_requested)?20:ap_started?100:power.recording?50:power.screen_on?200:
@@ -655,6 +658,7 @@ static void network_task(void *arg) {
                 free(line);
             }
         }
+        voice_copy_flush();
         finish_release();
         xSemaphoreTake(peer_mutex,portMAX_DELAY);
         uint64_t sent=last_sent_ms;bool has_peer=(peer.sin_addr.s_addr && peer.sin_port) || ble_owner;
@@ -679,7 +683,8 @@ static void network_task(void *arg) {
 esp_err_t vibe_network_init(void) {
     boot_nonce=esp_random();
     peer_mutex=xSemaphoreCreateMutex();packet_mutex=xSemaphoreCreateMutex();profiles_mutex=xSemaphoreCreateMutex(); tx_queue=xQueueCreate(8,sizeof(char *)); net_commands=xQueueCreate(4,sizeof(int));ble_rx_queue=xQueueCreate(4,sizeof(vibe_ble_ingress_t *));
-    if (!peer_mutex || !packet_mutex || !profiles_mutex || !tx_queue || !net_commands || !ble_rx_queue) return ESP_ERR_NO_MEM;
+    voice_copy_mutex=xSemaphoreCreateMutex();
+    if (!peer_mutex || !packet_mutex || !profiles_mutex || !voice_copy_mutex || !tx_queue || !net_commands || !ble_rx_queue) return ESP_ERR_NO_MEM;
     ESP_ERROR_CHECK(esp_netif_init()); ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta(); esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT(); ESP_ERROR_CHECK(esp_wifi_init(&cfg));
