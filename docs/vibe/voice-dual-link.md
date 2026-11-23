@@ -67,8 +67,12 @@ per block, using a 20 ms timer only while recording. This adds a deliberate
 120 ms recovery budget to audio latency. Missing leading blocks are skipped at
 the first deadline; a block repaired during prefill can still play.
 
-After playout begins, a missing block at its deadline becomes silence. A late
-copy is discarded. Large sequence gaps and scheduler delays resynchronize the
+After playout begins, a missing block can spend up to 200 ms of additional
+waiting across the entire recording. The output naturally pauses while waiting;
+a first copy arriving in that interval preserves the speech instead of deleting
+it. Total prefill plus rescue waiting is capped at 320 ms, excluding capture,
+transport and system output time. The budget never resets at every lost block.
+Once exhausted, missing blocks become silence and late copies are discarded. Large sequence gaps and scheduler delays resynchronize the
 bounded window instead of replaying seconds of stale speech. Terminal counts
 stop synthetic silence and size the final drain grace, capped at one second.
 No audio packet can initiate a recording. Event ordering scoped to device ID
@@ -81,6 +85,9 @@ attachments. Legacy recording retains its previous failover policy. The
 4.5-second fresh-audio watchdog, permission-loss handling, recording limit and
 immediate release on disconnect/sleep/quit remain. The merge timer and buffers
 are disposed with the recording; idle operation gains no periodic audio work.
+Up to eight distinct Enter actions received during normal audio drain wait until
+the shortcut is released. Mirrored copies remain deduplicated. Abnormal stop
+discards pending Enter actions, preventing delayed input after sleep or loss.
 
 ## Validation and diagnostics
 
@@ -93,7 +100,13 @@ gates and desktop radio/permission/sleep regressions remain required.
 
 Logs distinguish capture count, UDP/BLE submissions, overwritten/expired copies,
 received copies by leg, admitted blocks, duplicates, late packets, repaired holes,
-missed playout blocks and resynchronizations. A repaired hole is not a measured
+missed playout blocks, rescued deadlines, added delay and resynchronizations.
+Live copy sending performs no periodic console I/O; cumulative device counters
+are reported after capture. Routine memory/stack reports defer during audio.
+Desktop audio-device availability refreshes asynchronously at most once per
+second; audio packets never enumerate CoreAudio devices, and audio-only UI
+updates are capped at five per second. Sleep invalidates pending probes.
+A repaired hole is not a measured
 RF loss rate. No audio, credentials or user speech is logged.
 
 Hardware acceptance compares identical long recordings with Wi-Fi only, BLE

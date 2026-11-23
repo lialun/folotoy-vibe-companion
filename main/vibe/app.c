@@ -520,7 +520,8 @@ void app_main(void) {
         }
         if ((have && msg.type==V_MSG_KEY) || now-painted>=200) { vibe_ui_refresh(); painted=now; }
         if (now>=profile_at) {
-            if (usb_serial_jtag_is_connected()) report_memory();
+            xSemaphoreTake(v_mutex,portMAX_DELAY);bool realtime=v_model.recording || v_status.audio_busy;xSemaphoreGive(v_mutex);
+            if (!realtime && usb_serial_jtag_is_connected()) report_memory();
             profile_at=now+60000;
         }
     }

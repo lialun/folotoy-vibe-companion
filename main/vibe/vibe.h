@@ -54,6 +54,7 @@ uint32_t vibe_network_generation(void);
 int vibe_send_audio(const void *data, size_t len);
 /* V2 uplink: immediate UDP plus a bounded, independently drained BLE copy. */
 int vibe_send_voice(const void *data,size_t len,uint32_t owner);
+void vibe_voice_report(void);
 esp_err_t vibe_network_init(void);
 void vibe_network_wake(void);
 void vibe_network_release(void);

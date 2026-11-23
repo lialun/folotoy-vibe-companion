@@ -109,6 +109,7 @@ static void capture(int16_t *pcm) {
             snprintf(event,sizeof(event),"{\"event\":\"voice.end\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"frames\":%u}",(unsigned long long)session,captured);
             vibe_send_json(event);
         } else vibe_send_json("{\"event\":\"voice.end\"}");
+        if (v2) vibe_voice_report();
     }
     if (failed) {
         ESP_LOGE(TAG,"Capture failed; next UP press may retry");

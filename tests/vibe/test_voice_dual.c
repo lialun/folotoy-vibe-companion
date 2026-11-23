@@ -10,7 +10,8 @@
 typedef pthread_mutex_t *SemaphoreHandle_t;
 #define portMAX_DELAY 0xffffffffu
 #define pdTRUE 1
-#define ESP_LOGI(tag,...) do {(void)(tag);if(0)printf(__VA_ARGS__);}while(0)
+static unsigned diagnostic_logs;
+#define ESP_LOGI(tag,...) do {(void)(tag);++diagnostic_logs;if(0)printf(__VA_ARGS__);}while(0)
 static pthread_mutex_t peer_lock=PTHREAD_MUTEX_INITIALIZER,copy_lock=PTHREAD_MUTEX_INITIALIZER;
 static SemaphoreHandle_t peer_mutex=&peer_lock;
 static int xSemaphoreTake(SemaphoreHandle_t s,unsigned wait) {(void)wait;assert(!pthread_mutex_lock(s));return 1;}
@@ -88,5 +89,6 @@ int main(void) {
     pthread_mutex_lock(&barrier_lock);hold_ble=false;pthread_cond_broadcast(&barrier_cond);pthread_mutex_unlock(&barrier_lock);
     assert(!pthread_join(thread,NULL));voice_copy_flush();assert(!voice_pending.valid);
     ble_owner=false;peer.sin_addr.s_addr=0;assert(vibe_send_voice(body,sizeof(body),1)==-1);
+    assert(!diagnostic_logs);vibe_voice_report();assert(diagnostic_logs==1);
     puts("Voice V2 wire, bounded backup, owner/link generation, stale copy, one-link paths and blocked-BLE independence PASS");
 }

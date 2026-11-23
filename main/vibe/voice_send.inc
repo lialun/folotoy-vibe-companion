@@ -3,7 +3,6 @@
 static SemaphoreHandle_t voice_copy_mutex;
 static vibe_voice_copy_t voice_pending,voice_active;
 static struct {unsigned wifi,ble,failed,replaced,expired;} voice_tx;
-static uint64_t voice_reported;
 static int voice_ble_send(const vibe_voice_copy_t *copy) {
     xSemaphoreTake(peer_mutex,portMAX_DELAY);
     bool current=copy->owner==owner_generation && !release_after_send;
@@ -24,12 +23,15 @@ static void voice_copy_flush(void) {
         if (!result) ++voice_tx.ble;else ++voice_tx.failed;
         xSemaphoreGive(voice_copy_mutex);
     }
-    if (send && (!voice_reported || now-voice_reported>=5000)) {
-        xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);
-        unsigned wifi=voice_tx.wifi,ble=voice_tx.ble,failed=voice_tx.failed,replaced=voice_tx.replaced,expired=voice_tx.expired;
-        xSemaphoreGive(voice_copy_mutex);voice_reported=now;
-        ESP_LOGI(TAG,"Voice copies cumulative wifi=%u ble=%u failed=%u replaced=%u expired=%u",wifi,ble,failed,replaced,expired);
-    }
+}
+/* USB console writes can wait for host drainage. Keep diagnostic I/O out of
+ * the live copy worker; take this snapshot only after capture has ended. */
+void vibe_voice_report(void) {
+    if (!voice_copy_mutex) return;
+    xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);
+    unsigned wifi=voice_tx.wifi,ble=voice_tx.ble,failed=voice_tx.failed,replaced=voice_tx.replaced,expired=voice_tx.expired;
+    xSemaphoreGive(voice_copy_mutex);
+    ESP_LOGI(TAG,"Voice copies cumulative wifi=%u ble=%u failed=%u replaced=%u expired=%u",wifi,ble,failed,replaced,expired);
 }
 int vibe_send_voice(const void *bytes,size_t n,uint32_t expected_owner) {
     if (udp<0 || !voice_copy_mutex || !bytes || n!=VIBE_VOICE_BODY || !expected_owner) return -1;
