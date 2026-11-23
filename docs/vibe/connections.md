@@ -31,8 +31,9 @@ gesture is excluded from confirmation decisions.
 3. The device wakes and displays the requesting computer name. Press the upper key
    to accept, or the lower/settings key to cancel.
 4. Authorized computers reconnect automatically. Wi-Fi and BLE can remain attached
-   together. Business traffic prefers Wi-Fi and falls back to BLE after approximately
-   three seconds without a Wi-Fi heartbeat, without another confirmation or transport picker.
+   together. A healthy primary link stays selected, including BLE after Wi-Fi
+   returns. Sustained failure can use the other authenticated attachment without
+   another confirmation.
 
 Another computer can request a connection directly. The device asks to switch;
 only acceptance and successful credential persistence revoke the previous authorization.
@@ -89,8 +90,9 @@ Its seven-byte header contains `0x56`, message ID, start/end flags, little-endia
 length and offset. Assembly is capped at 1537 bytes and two seconds. LAN and BLE
 share application authorization; attaching a link does not change the session
 generation. A computer handover invalidates queued commands from the old generation.
-Business messages use one primary link; audio sequences and critical event IDs
-provide loss/duplicate checks.
+Audio uses one primary link. Critical voice/button events mirror the same
+event ID over both authorized links; the desktop deduplicates before acting.
+Audio sequences provide loss/duplicate checks.
 
 Authenticated `pc.status` beacons carry `primaryTransport` (`wifi` or `bluetooth`).
 The desktop reports its receive-side choice immediately when it changes, so
@@ -98,6 +100,31 @@ one-way Wi-Fi loss cannot leave the device sending into a failed return path.
 The device honors a BLE preference only while that link is fresh, and otherwise
 uses fresh Wi-Fi. Older peers without the field retain automatic selection.
 
+
+## Transport stability and congestion
+
+A recovered heartbeat does not preempt a working link. With a backup that has
+received authenticated traffic within three seconds, the desktop changes the
+primary only after six seconds of current-link silence, an explicit disconnect,
+or three seconds without recording audio. A full five-second audio window with
+at least twenty sequence positions and 70% missing is also severe failure.
+Audio-only failover has a fifteen-second
+hold; a disconnected/unresponsive primary can bypass it. A new recording and a
+newly selected link get an audio-start grace. The existing 4.5-second no-audio
+release remains, so two failed links cannot leave shortcut keys held. Minor
+jitter and low signal alone do not switch routes. Both peers use the six-second
+link window; a healthy BLE session has no automatic Wi-Fi switchback.
+
+Device notifications check the projected mbuf chain cost against both the total
+free blocks and the specific pool used by that chain. Voice preserves four pool
+blocks and six total blocks after allocation. Under pressure, worker tasks wait
+within a thirty-millisecond voice budget or fifty-millisecond control budget;
+callbacks never wait. No extra audio queue or larger buffer pool is introduced.
+ATT congestion retries the same desktop fragment at 100, 250, 500 and 1000 ms;
+new writes cannot bypass the wait. A success resets backoff, while disconnect or
+service replacement invalidates old retries. Resource/queue exhaustion is not
+reported as a pairing failure. Logs retain error domain/code, per-link voice
+packet counts, stop reasons, pool availability, free heap and largest free block.
 
 ## Computer sleep
 

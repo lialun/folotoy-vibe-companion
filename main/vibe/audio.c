@@ -63,7 +63,8 @@ static void capture(int16_t *pcm) {
     vibe_snapshot(&m,&p,&s);
     if (!m.recording || !m.voice_ready) return;
     esp_wifi_set_ps(WIFI_PS_NONE);
-    bool started=false,failed=false;
+    bool started=false,failed=false;unsigned captured=0,send_drops=0;
+    uint64_t began=vibe_now();
     if (prepare_audio("capture") && bsp_audio_set_format(16000,16,1)==ESP_OK && bsp_audio_set_input_gain(p.mic_gain)==ESP_OK) {
         bsp_audio_set_volume(0); /* I2S duplex clocks remain active; no speaker feedback. */
         portENTER_CRITICAL(&request_mux);uint64_t requested=voice_requested_at;portEXIT_CRITICAL(&request_mux);
@@ -82,12 +83,15 @@ static void capture(int16_t *pcm) {
             /* Keep the last block on normal release so word endings aren't cut. */
             size_t bytes=adpcm_encode_block(&state,pcm,ADPCM_BLOCK_SAMPLES,packet+2,ADPCM_BLOCK_BYTES);
             packet[0]=sequence++;
+            ++captured;
             if (bytes && vibe_send_audio(packet,bytes+2)!=0) {
+                ++send_drops;
                 xSemaphoreTake(v_mutex,portMAX_DELAY); ++v_status.drops; xSemaphoreGive(v_mutex);
             }
         }
     } else failed=true;
     if (started) {
+        ESP_LOGI(TAG,"Voice TX captured=%u send_drops=%u duration_ms=%llu",captured,send_drops,(unsigned long long)(vibe_now()-began));
         /* This event and data use one socket; Mac has a 180ms audio-drain grace. */
         vibe_send_json("{\"event\":\"voice.end\"}");
     }

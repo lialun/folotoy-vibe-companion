@@ -42,6 +42,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
     private var retries:[String:BLEConnectionRetry]=[:]
     private var writeLogCount=0,readLogCount=0,frameLogCount=0,packetLogCount=0
     private var frames=BLEWriteBuffer(),writing=false,sequence:UInt8=0,decoder=BLEFrame(),generation=0
+    private var writeRetry=BLEWriteRetry()
     var isActive:Bool { notificationReady && selected?.state == .connected }
     private let queue:DispatchQueue
     var onFound:((String,UUID,Bool)->Void)?
@@ -54,6 +55,14 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
     static func isPairingRecordLost(_ error:Error?)->Bool {
         guard let error=error as NSError? else { return false }
         return error.domain==CBErrorDomain && error.code==CBError.Code.peerRemovedPairingInformation.rawValue
+    }
+    static func isWriteCongestion(_ error:Error)->Bool {
+        let e=error as NSError
+        return e.domain==CBATTErrorDomain && [CBATTError.Code.insufficientResources.rawValue,CBATTError.Code.prepareQueueFull.rawValue].contains(e.code)
+    }
+    static func isWriteAuthenticationError(_ error:Error)->Bool {
+        let e=error as NSError
+        return e.domain==CBATTErrorDomain && [CBATTError.Code.insufficientAuthentication.rawValue,CBATTError.Code.insufficientEncryption.rawValue,CBATTError.Code.insufficientAuthorization.rawValue].contains(e.code)
     }
     init(queue:DispatchQueue) { self.queue=queue;super.init();central=CBCentralManager(delegate:self,queue:queue) }
     func scan() {
@@ -79,6 +88,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         generation+=1
         if let selected=selected { central.cancelPeripheralConnection(selected) }
         selected=nil;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame()
+        writeRetry.reset()
         notificationReady=false;lastReceived = .distantPast
     }
     func disconnect(after delay:TimeInterval,when allowed:@escaping ()->Bool) {
@@ -191,7 +201,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         guard peripheral.identifier==selected?.identifier,invalidatedServices.contains(where:{$0.uuid==Self.service}) else {return}
         // A firmware update can change properties while the encrypted bond is
         // retained. Rediscover without forgetting the device or its authority.
-        generation+=1;notificationReady=false;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame()
+        generation+=1;notificationReady=false;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame();writeRetry.reset()
         onDisconnected?("蓝牙服务正在更新")
         peripheral.discoverServices([Self.service])
     }
@@ -241,11 +251,31 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         guard peripheral.identifier==selected?.identifier,let rx=rx else { return };writeNext(peripheral,rx)
     }
     func peripheral(_ peripheral:CBPeripheral,didWriteValueFor characteristic:CBCharacteristic,error:Error?) {
-        guard peripheral.identifier==selected?.identifier else { return }
-        if let error=error { log.error("BLE write failed: \(error.localizedDescription,privacy:.public)");failed("蓝牙配对未完成，请重试");onAuthenticationFailed?("蓝牙配对未完成，请重试");return }
+        guard peripheral.identifier==selected?.identifier,characteristic === rx else { return }
+        if let error=error {
+            let e=error as NSError
+            log.error("BLE write failed domain=\(e.domain,privacy:.public) code=\(e.code) message=\(e.localizedDescription,privacy:.public)")
+            if Self.isWriteCongestion(error),let delay=writeRetry.delay() {
+                let expected=generation
+                log.notice("BLE write congested; retry=\(self.writeRetry.attempts) delay_ms=\(Int(delay*1000)) queued=\(self.frames.count)")
+                // Keep writing=true and retain the first fragment. Other
+                // producers cannot bypass backoff or overwrite this write.
+                queue.asyncAfter(deadline:.now()+delay) { [weak self,weak peripheral] in
+                    guard let self=self,self.enabled,self.generation==expected,
+                          let peripheral=peripheral,peripheral.identifier==self.selected?.identifier,let rx=self.rx else {return}
+                    self.writing=false;self.writeNext(peripheral,rx)
+                }
+                return
+            }
+            let authentication=Self.isWriteAuthenticationError(error),lost=Self.isPairingRecordLost(error)
+            let message=lost ? "蓝牙配对记录已失效":authentication ? "蓝牙安全连接未完成，请重试":"蓝牙数据发送失败，正在重新连接"
+            failed(message,pairingLost:lost)
+            if authentication {onAuthenticationFailed?(message)}
+            return
+        }
         if writeLogCount<6 { log.info("BLE write acknowledged bytes=\(self.frames.first?.count ?? 0)");writeLogCount+=1 }
         onStatus?("")
-        frames.acknowledge();writing=false
+        frames.acknowledge();writing=false;writeRetry.reset()
         if let rx=rx { writeNext(peripheral,rx) }
     }
 }

@@ -27,6 +27,9 @@ final class Engine {
     private var clientID=""
     private var bluetooth:BluetoothLink?
     private var transport=ConnectionTransport.wifi
+    private var transportPolicy=TransportPolicy()
+    private var voiceLoss=VoiceLossWindow()
+    private var voiceWiFiPackets=0,voiceBLEPackets=0
     private var authenticated=false,pairing=false,running=false,tearingDown=false
     private let lifecycle=EngineLifecycle()
     private var paused:Bool {get{lifecycle.userPaused} set{lifecycle.userPaused=newValue}}
@@ -224,12 +227,16 @@ final class Engine {
     }
     private func updateTransport() {
         let previous=transport
-        if Date().timeIntervalSince(wifiLastSeen)<ConnectionTiming.linkFresh { transport = .wifi;peer=discovery.devices[device]?.endpoint }
-        else if Date().timeIntervalSince(bleLastSeen)<ConnectionTiming.linkFresh { transport = .bluetooth;peer=Self.bleEndpoint }
+        let severe=active && !ending && voiceLoss.severe(now:Date())
+        guard let change=transportPolicy.select(current:transport,wifi:wifiLastSeen,ble:bleLastSeen,now:Date(),
+                                               voiceStarted:active && !ending ? voiceStarted:nil,audio:lastAudio,severeLoss:severe) else {return}
+        transport=change.transport
+        peer=transport == .wifi ? discovery.devices[device]?.endpoint:Self.bleEndpoint
         if transport != previous && authenticated && !paused && !token.isEmpty {
-            if active { voiceLog.info("Voice transport changed to=\(self.transport.rawValue,privacy:.public)") }
+            voiceLog.info("Transport changed from=\(previous.rawValue,privacy:.public) to=\(self.transport.rawValue,privacy:.public) reason=\(change.reason,privacy:.public) recording=\(self.active) loss_pct=\(self.voiceLoss.percent)")
             beacon(broadcast:false);lastBeacon=Date()
         }
+        voiceLoss.reset(now:Date())
     }
     private func sendOnAvailableLinks(_ body:[String:Any],type:UInt8=2) {
         if let found=discovery.devices[device],found.hasWiFi { _=send(body,type:type,to:found.endpoint) }
@@ -332,7 +339,9 @@ final class Engine {
         if now.timeIntervalSince(lastDiscovery)>(authenticated ? 10 : 2) {
             beacon(broadcast:true);lastDiscovery=now
         }
-        if active && (now.timeIntervalSince(lastAudio)>ConnectionTiming.voiceTimeout || now.timeIntervalSince(lastKey)>180 || !Shortcut.permitted) { endVoice(immediate:true) }
+        if active && now.timeIntervalSince(lastAudio)>ConnectionTiming.voiceTimeout { endVoice(immediate:true,reason:"audio-timeout") }
+        else if active && now.timeIntervalSince(lastKey)>180 { endVoice(immediate:true,reason:"recording-limit") }
+        else if active && !Shortcut.permitted { endVoice(immediate:true,reason:"permission-lost") }
         let readiness="\(AudioSink.deviceUID() != nil)/\(Shortcut.permitted)/\(TimeZone.current.secondsFromGMT())"
         let changed=readiness != lastReadiness;lastReadiness=readiness
         if now.timeIntervalSince(lastBeacon)>=1 || (changed && peer != nil) {
@@ -425,21 +434,28 @@ final class Engine {
         guard !paused else { return }
         if !viaBLE { guard let found=discovery.devices[device],LANSocket.sameEndpoint(found.endpoint,from) else { return } }
         if authenticated {
-            lastSeen=Date();if viaBLE { bleLastSeen=Date() } else { wifiLastSeen=Date() };updateTransport()
+            lastSeen=Date();if viaBLE { bleLastSeen=Date() } else { wifiLastSeen=Date() }
+            // Accept a recovered audio packet before considering a stall.
+            if case .audio=packet {} else {updateTransport()}
         }
         switch packet {
         case .ping:break
         case .audio(let seq,let pcm):
             guard authenticated,active else { return }
+            var missing=0
             if let previous=sequence {
                 let delta=seq &- previous
                 if delta==0 || delta>128 { return }
+                missing=Int(delta)-1
                 if delta>1 { state.dropped+=Int(delta)-1;for _ in 0..<min(3,Int(delta)-1) { sink.append([Int16](repeating:0,count:1600)) } }
             }
             let received=Date()
             if state.packets==voiceInitialPackets { voiceLog.info("Voice first audio ms=\(Int(received.timeIntervalSince(self.voiceStarted)*1000)) transport=\(self.transport.rawValue,privacy:.public)") }
             else { voiceMaxGap=max(voiceMaxGap,received.timeIntervalSince(lastAudio)) }
-            sequence=seq;state.packets+=1;lastAudio=received;sink.append(pcm)
+            sequence=seq;state.packets+=1;lastAudio=received
+            voiceLoss.record(missing:missing)
+            if viaBLE {voiceBLEPackets+=1} else {voiceWiFiPackets+=1}
+            sink.append(pcm)
         case .event(let body):
             guard authenticated || (pairing && body["event"] as? String=="config.reply") else { return };handle(body)
         }
@@ -497,10 +513,12 @@ final class Engine {
                 guard !powerSuspended,try keyboard.start(shortcut) else {sink.stop();return}
                 active=true;ending=false;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
                 voiceStarted=Date();voiceInitialPackets=state.packets;voiceInitialDropped=state.dropped;voiceMaxGap=0
+                voiceWiFiPackets=0;voiceBLEPackets=0
+                voiceLoss.reset(now:voiceStarted)
                 voiceLog.info("Voice started transport=\(self.transport.rawValue,privacy:.public)")
             }
             catch { sink.stop();keyboard.stop();state.error=powerSuspended ? "" : error.localizedDescription }
-        case "voice.end": endVoice(immediate:false)
+        case "voice.end": endVoice(immediate:false,reason:"device-released")
         case "key.action":
             voiceLog.info("Key action received authenticated=\(self.authenticated) active=\(self.active) permitted=\(Shortcut.permitted)")
             if authenticated,!token.isEmpty,!active,body["action"] as? String=="enter" { keyboard.enter() }
@@ -597,14 +615,14 @@ final class Engine {
         settingsRevision=(body["settingsRevision"] as? NSNumber)?.uint32Value
         let value=prefs,source=device;DispatchQueue.main.async { self.onSettings?(value,source) }
     }
-    private func endVoice(immediate:Bool) {
+    private func endVoice(immediate:Bool,reason:String="session-ended") {
         guard active else { return }
         ending=true
         generation+=1;let expected=generation
         let stop={ [self] in
             guard generation==expected else { return }
             keyboard.stop();sink.stop();active=false;ending=false;sequence=nil
-            voiceLog.info("Voice stopped packets=\(self.state.packets-self.voiceInitialPackets) dropped=\(self.state.dropped-self.voiceInitialDropped) max_gap_ms=\(Int(self.voiceMaxGap*1000)) immediate=\(immediate)")
+            voiceLog.info("Voice stopped packets=\(self.state.packets-self.voiceInitialPackets) dropped=\(self.state.dropped-self.voiceInitialDropped) max_gap_ms=\(Int(self.voiceMaxGap*1000)) immediate=\(immediate) reason=\(reason,privacy:.public) wifi_packets=\(self.voiceWiFiPackets) ble_packets=\(self.voiceBLEPackets) silence_ms=\(Int(Date().timeIntervalSince(self.lastAudio)*1000))")
             publish()
         }
         if immediate { stop() } else { work.asyncAfter(deadline:.now()+0.18,execute:stop) }
@@ -654,6 +672,7 @@ final class Engine {
         work.async { self.endVoice(immediate:true);self.shortcut=spec }
     }
     private func disconnect(_ message:String) {
+        transportPolicy.reset()
         stopWeather();weatherLocation=nil;stopRadioPlayback()
         authenticated=false;pairing=false;connectionMessage="";slowHeartbeat=false;wifiLastSeen = .distantPast;bleLastSeen = .distantPast;state.powerAvailable=false;state.powerLoading=false
         agentPending.removeAll();agentCapable=false;quotaCapable=false;quotaSent.removeAll();
@@ -700,7 +719,11 @@ final class Engine {
         var rediscovery=hello;rediscovery["authChecked"]=false;rediscovery["authorized"]=false;feed(rediscovery)
         check(engine.peer != nil && !engine.paused,"rediscovery restores an endpoint before authenticated reconnect")
         feed(hello,ble:true);feed(hello)
-        check(engine.authenticated && engine.transport == .wifi && Date().timeIntervalSince(engine.bleLastSeen)<1,"one authorized session keeps Wi-Fi and BLE attached")
+        check(engine.authenticated && engine.transport == .bluetooth && Date().timeIntervalSince(engine.wifiLastSeen)<1,"one authorized session keeps both attachments without preempting healthy BLE")
+        let mirrored:[String:Any]=["event":"key.action","action":"test-no-input","eid":321]
+        for _ in 0..<3 {feed(mirrored);feed(mirrored,ble:true)}
+        check(engine.recentEvents.filter{$0==321}.count==1,"mirrored critical event retries enter the action path once across both links")
+        engine.transport = .wifi;engine.transportPolicy.reset()
         engine.wifiLastSeen=Date().addingTimeInterval(-7);engine.updateTransport()
         check(engine.transport == .bluetooth && engine.authenticated,"LAN timeout falls back to BLE without losing authorization")
         do {

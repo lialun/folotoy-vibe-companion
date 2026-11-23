@@ -1,8 +1,26 @@
 #include "ble_frame.h"
 #include "ble_links.h"
+#include "ble_tx_budget.h"
 #include <assert.h>
 #include <stdio.h>
 int main(void) {
+    assert(vibe_ble_tx_admit(6,4,true));
+    assert(!vibe_ble_tx_admit(20,3,true)); /* Another pool's free blocks cannot hide exhaustion. */
+    assert(!vibe_ble_tx_admit(5,5,true));
+    assert(vibe_ble_tx_admit(3,2,false)); /* Control can use the protected reserve. */
+    assert(!vibe_ble_tx_admit(2,0,false));
+    assert(vibe_ble_tx_wait(100,129,true) && !vibe_ble_tx_wait(100,130,true));
+    assert(vibe_ble_tx_wait(100,149,false) && !vibe_ble_tx_wait(100,150,false));
+    assert(!vibe_ble_tx_wait(100,99,true));
+    /* Simulate a stalled controller: repeated voice submissions stop before
+     * small-pool exhaustion and a write response can still be allocated. */
+    unsigned available=12;
+    for(unsigned i=0;i<1000;i++) {
+        if(available>=3 && vibe_ble_tx_admit(available-3,available-3,true)) available-=3;
+        assert(available>=4);
+    }
+    assert(available==6 && available>=3); /* Request + response headroom remains. */
+    available+=3;assert(vibe_ble_tx_admit(available-3,available-3,true));
     vibe_ble_links_t registry;vibe_ble_links_init(&registry);
     /* Reproduce macOS bond restoration: subscription precedes CONNECT. */
     vibe_ble_link_subscription(&registry,1,15,15,true);

@@ -5,9 +5,12 @@
 int main(void) {
     assert(vibe_peer_use_wifi(10000,9999,9999,true,true,false));
     assert(!vibe_peer_use_wifi(10000,9999,9999,true,true,true));
-    assert(vibe_peer_use_wifi(10000,9999,7000,true,true,true));
-    assert(!vibe_peer_use_wifi(10000,7000,9999,true,true,false));
-    assert(vibe_peer_use_wifi(10000,7001,9999,true,true,false));
+    assert(vibe_peer_use_wifi(10000,9999,4000,true,true,true));
+    assert(!vibe_peer_use_wifi(10000,4000,9999,true,true,false));
+    assert(vibe_peer_use_wifi(10000,4001,9999,true,true,false));
+    /* Short jitter cannot make the device override the computer's sticky route. */
+    assert(!vibe_peer_use_wifi(10000,9999,5000,true,true,true));
+    assert(vibe_peer_use_wifi(10000,5000,9999,true,true,false));
     assert(vibe_peer_use_wifi(10000,9999,9999,true,false,true));
     assert(!vibe_peer_use_wifi(10000,9999,9999,false,true,false));
     assert(!vibe_peer_use_wifi(10000,10001,9999,true,true,false));

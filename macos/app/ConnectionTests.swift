@@ -3,6 +3,7 @@ import Darwin
 
 enum ConnectionTests {
     static func run(_ check:(Bool,String)->Void) {
+        TransportPolicyTests.run(check)
         var sleep=SleepResumePolicy()
         let beforeSleep=sleep.generation
         check(sleep.acceptsCompletion(from:beforeSleep),"permission work can complete within an awake session")
@@ -26,7 +27,7 @@ enum ConnectionTests {
         let newResume=lifecycle.requestResume()
         check(lifecycle.completeResume(newResume) && !lifecycle.isSuspended && lifecycle.userPaused,"wake keeps explicit disconnect intent")
         Engine.testSleepLifecycle(check)
-        check(ConnectionTiming.linkFresh<ConnectionTiming.voiceTimeout && ConnectionTiming.voiceTimeout<ConnectionTiming.sessionTimeout,"transport fallback precedes voice expiry and session disconnect")
+        check(TransportPolicy.voiceStall<ConnectionTiming.voiceTimeout && ConnectionTiming.linkFresh<ConnectionTiming.sessionTimeout,"audio fallback precedes voice expiry; sustained link silence precedes session disconnect")
         check(ConnectionTiming.voiceTimeout<ConnectionTiming.bleSilenceTimeout && ConnectionTiming.bleSilenceTimeout<ConnectionTiming.sessionTimeout,"stalled BLE recovers after safe voice release and before logical session expiry")
         var writes=BLEWriteBuffer()
         check(writes.append([Data([1]),Data([2]),Data([3])],radio:true),"BLE media enqueued as complete fragments")

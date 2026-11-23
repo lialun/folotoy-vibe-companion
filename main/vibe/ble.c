@@ -2,6 +2,7 @@
 #include "ble.h"
 #include "ble_frame.h"
 #include "ble_links.h"
+#include "ble_tx_budget.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -9,7 +10,10 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "os/os_mbuf.h"
+#include "os/os_mempool.h"
+#include "os/os.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdatomic.h>
@@ -225,19 +229,45 @@ int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t l
     if (!capacity) { xSemaphoreGive(tx_mutex);return -1; }
     if (capacity>240) capacity=240;
     uint8_t id=++message_id,frame[247];size_t total=length+1;
+    const bool audio=type==1;uint64_t began=vibe_now();
     for (size_t offset=0;offset<total;) {
         size_t n=total-offset;if (n>capacity) n=capacity;
         frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);
         frame[3]=total&255;frame[4]=total>>8;frame[5]=offset&255;frame[6]=offset>>8;
         for (size_t i=0;i<n;i++) frame[VIBE_BLE_HEADER+i]=(offset+i)==0 ? type : ((const uint8_t *)bytes)[offset+i-1];
-        struct os_mbuf *buffer=ble_hs_mbuf_from_flat(frame,n+VIBE_BLE_HEADER);
-        int result=buffer?ble_gatts_notify_custom(conn,tx_handle,buffer):BLE_HS_ENOMEM;
+        int result=BLE_HS_ENOMEM;unsigned free_total=0,min_pool=0;
+        do {
+            struct os_mbuf *buffer=ble_hs_mbuf_att_pkt();
+            free_total=(unsigned)os_msys_num_free();min_pool=UINT16_MAX;
+            if (buffer) {
+                /* Append uses this same pool for the entire chain. Check its
+                 * projected cost before copying; allocating the full chain
+                 * first would temporarily consume the control reserve. */
+                uint32_t critical;OS_ENTER_CRITICAL(critical);
+                min_pool=buffer->om_omp->omp_pool->mp_num_free;
+                OS_EXIT_CRITICAL(critical);
+                unsigned space=OS_MBUF_TRAILINGSPACE(buffer),block=buffer->om_omp->omp_databuf_len;
+                unsigned extra=n+VIBE_BLE_HEADER>space ? (n+VIBE_BLE_HEADER-space+block-1)/block:0;
+                if (extra<=free_total && extra<=min_pool && vibe_ble_tx_admit(free_total-extra,min_pool-extra,audio) &&
+                    os_mbuf_append(buffer,frame,n+VIBE_BLE_HEADER)==0) {
+                    result=ble_gatts_notify_custom(conn,tx_handle,buffer); /* Consumes buffer on every outcome. */
+                    if (!result || (result!=BLE_HS_ENOMEM && result!=BLE_HS_EAGAIN)) break;
+                } else os_mbuf_free_chain(buffer);
+            } else min_pool=0;
+            if (!vibe_ble_tx_wait(began,vibe_now(),audio)) break;
+            vTaskDelay(pdMS_TO_TICKS(2)?pdMS_TO_TICKS(2):1);
+        } while (vibe_ble_tx_wait(began,vibe_now(),audio));
         if (result) {
-            static unsigned failures;
-            if (failures++<4) ESP_LOGW("vibe_ble","Notification failed handle=%u result=%d",(unsigned)conn,result);
+            static uint64_t reported;static unsigned failures;++failures;
+            uint64_t now=vibe_now();
+            if (!reported || now-reported>=5000) {
+                reported=now;ESP_LOGW("vibe_ble","TX pressure handle=%u type=%u result=%d free=%u pool=%u failures=%u heap=%u largest=%u",(unsigned)conn,type,result,free_total,min_pool,failures,(unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            }
             xSemaphoreGive(tx_mutex);return -1;
         }
         offset+=n;
+        /* The next fragment must pass the same pool admission. Wait only under
+         * pressure; imposing a per-fragment delay would hurt small-MTU peers. */
     }
     xSemaphoreGive(tx_mutex);return 0;
 }

@@ -494,7 +494,7 @@ static void network_ble_disconnected(uint16_t handle) {
     xSemaphoreTake(peer_mutex,portMAX_DELAY);
     bool owned=ble_owner && ntohs(ble_peer.sin_port)==handle+1;
     if (owned) { ble_owner=false;ble_seen=0;memset(&ble_peer,0,sizeof(ble_peer)); }
-    bool keep_wifi=peer.sin_port && wifi_seen && vibe_now()-wifi_seen<3000;
+    bool keep_wifi=vibe_peer_use_wifi(vibe_now(),wifi_seen,0,peer.sin_addr.s_addr && peer.sin_port,false,false);
     xSemaphoreGive(peer_mutex);
     if (owned) {
         xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.ble_peer=false;
@@ -649,7 +649,9 @@ static void network_task(void *arg) {
             cJSON_AddNumberToObject(o,"eid",++event_sequence);
             char *line=cJSON_PrintUnformatted(o); cJSON_Delete(o);
             if (line) {
-                for (int i=0;i<3;i++) send_packet(2,line,strlen(line));
+                /* The same event ID on both authorized attachments survives a
+                 * burst on the primary. The desktop deduplicates before input. */
+                for (int i=0;i<3;i++) vibe_send_json_both(line);
                 free(line);
             }
         }

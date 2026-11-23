@@ -5,8 +5,8 @@
 /* The computer sees return-path loss that incoming beacons cannot reveal. */
 static inline bool vibe_peer_use_wifi(uint64_t now,uint64_t wifi_seen,uint64_t ble_seen,
                                      bool has_wifi,bool has_ble,bool prefer_ble) {
-    bool wifi_fresh=has_wifi && wifi_seen && now>=wifi_seen && now-wifi_seen<3000;
-    bool ble_fresh=has_ble && ble_seen && now>=ble_seen && now-ble_seen<3000;
+    bool wifi_fresh=has_wifi && wifi_seen && now>=wifi_seen && now-wifi_seen<6000;
+    bool ble_fresh=has_ble && ble_seen && now>=ble_seen && now-ble_seen<6000;
     return wifi_fresh && !(prefer_ble && ble_fresh);
 }
 
