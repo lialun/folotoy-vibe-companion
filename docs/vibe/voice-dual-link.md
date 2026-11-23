@@ -105,7 +105,11 @@ Live copy sending performs no periodic console I/O; cumulative device counters
 are reported after capture. Routine memory/stack reports defer during audio.
 Desktop audio-device availability refreshes asynchronously at most once per
 second; audio packets never enumerate CoreAudio devices, and audio-only UI
-updates are capped at five per second. Sleep invalidates pending probes.
+updates are capped at five per second. Sleep invalidates pending probes. Active voice uses a scoped latency-critical
+activity that allows system and display sleep, released before audio disposal
+on every stop. First-copy arrival-gap and late-first-copy counters distinguish
+packets that missed playout from copies that never arrived; late duplicates do
+not establish RF loss. The desktop seen-set is bounded by the 2000-frame limit.
 A repaired hole is not a measured
 RF loss rate. No audio, credentials or user speech is logged.
 

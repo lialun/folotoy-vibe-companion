@@ -33,6 +33,7 @@ enum VoiceMergeTests {
         check(merge.drain(now:0.32).count==1 && merge.drain(now:2).isEmpty,"end count prevents trailing silence")
         check(!merge.accept(frame(3),via:.wifi,now:2),"terminal count rejects post-release audio")
         check(merge.duplicates==1 && merge.late==2 && merge.recovered==1,"merge diagnostics distinguish duplicate, late and recovered")
+        check(merge.received==3 && merge.lateFirst==0,"late duplicate is not reported as a first-copy deadline miss")
         var startup=VoiceMerge(session:session)
         _=startup.accept(frame(1),via:.wifi,now:0);_=startup.accept(frame(0),via:.bluetooth,now:0.1)
         if case .audio(let f,_)?=startup.drain(now:0.12).first {check(f.sequence==0,"initial out-of-order block can recover during prefill")}
@@ -58,6 +59,8 @@ enum VoiceMergeTests {
         check(rescue.extraDelay>0.13 && rescue.extraDelay<0.15,"only measured waiting extends latency")
         _=rescue.drain(now:0.46);_=rescue.drain(now:0.53)
         check(rescue.extraDelay<=VoiceMerge.rescueBudget && rescue.next>2,"permanent loss cannot wait indefinitely")
+        _=rescue.accept(frame(2),via:.wifi,now:0.6)
+        check(rescue.lateFirst==1 && rescue.received==3,"first copy arriving after playout is distinct from radio loss")
         var events=VoiceSessionEvents()
         check(events.accept(id:2) && !events.accept(id:1),"end preceding start prevents delayed automatic rerecording")
         check(events.accept(id:3) && !events.accept(id:3) && !events.accept(id:2),"control copies cannot affect a later session")

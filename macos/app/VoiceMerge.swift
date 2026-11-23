@@ -23,19 +23,24 @@ struct VoiceMerge {
     let session:UInt64
     private var blocks:[UInt32:(VoiceFrame,ConnectionTransport)]=[:]
     private var holes:Set<UInt32>=[]
+    private var seen:Set<UInt32>=[]
     private var deadline:TimeInterval?,endCount:UInt32?
     private var played=false
     private var waiting=false
     private(set) var extraDelay:TimeInterval=0,rescued=0
     private(set) var next:UInt32=0,accepted=0,duplicates=0,late=0,recovered=0,missing=0,resyncs=0
     private(set) var wifiCopies=0,bleCopies=0
+    private(set) var lateFirst=0
+    var received:Int {seen.count}
     var buffered:Int {blocks.count}
     init(session:UInt64) {self.session=session}
     mutating func accept(_ frame:VoiceFrame,via source:ConnectionTransport,now:TimeInterval)->Bool {
         guard frame.session==session,frame.block.count==VoiceFrame.blockSize,
               frame.sequence<VoiceFrame.maxFrames else {return false}
         if source == .wifi {wifiCopies+=1}else{bleCopies+=1}
-        if frame.sequence<next || endCount.map({frame.sequence >= $0})==true {late+=1;return false}
+        if endCount.map({frame.sequence >= $0})==true {late+=1;return false}
+        let first=seen.insert(frame.sequence).inserted
+        if frame.sequence<next {late+=1;if first {lateFirst+=1};return false}
         if blocks[frame.sequence] != nil {duplicates+=1;return false}
         if frame.sequence-next>=Self.capacity {
             // A long outage must not turn into seconds of stale playback.

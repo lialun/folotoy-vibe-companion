@@ -37,6 +37,8 @@ final class Engine {
     private var voiceEnter=VoiceEnterBuffer()
     private var audioAvailable=false,audioProbeBusy=false,audioProbeGeneration=0
     private var lastAudioProbe=Date.distantPast,lastAudioUI:TimeInterval=0
+    private var voiceObservedAt:TimeInterval?,voiceActivity:NSObjectProtocol?
+    private static let voiceActivityOptions:ProcessInfo.ActivityOptions=[.userInitiatedAllowingIdleSystemSleep,.latencyCritical]
     private var authenticated=false,pairing=false,running=false,tearingDown=false
     private let lifecycle=EngineLifecycle()
     private var paused:Bool {get{lifecycle.userPaused} set{lifecycle.userPaused=newValue}}
@@ -485,7 +487,16 @@ final class Engine {
             if viaBLE {voiceBLEPackets+=1} else {voiceWiFiPackets+=1}
             sink.append(pcm)
         case .voice(let frame):
-            guard authenticated,active,voiceMerge?.accept(frame,via:viaBLE ? .bluetooth:.wifi,now:ProcessInfo.processInfo.systemUptime)==true else {return}
+            guard authenticated,active else {return}
+            let now=ProcessInfo.processInfo.systemUptime,before=voiceMerge?.received ?? 0
+            let admitted=voiceMerge?.accept(frame,via:viaBLE ? .bluetooth:.wifi,now:now)==true
+            if let observed=voiceMerge?.received,observed>before {
+                if let previous=voiceObservedAt,now-previous>0.25 {
+                    voiceLog.info("Voice arrival gap_ms=\(Int((now-previous)*1000)) sequence=\(frame.sequence) via_ble=\(viaBLE) admitted=\(admitted) next=\(self.voiceMerge?.next ?? 0)")
+                }
+                voiceObservedAt=now
+            }
+            guard admitted else {return}
             let received=Date()
             if state.packets==voiceInitialPackets {voiceLog.info("Voice first audio ms=\(Int(received.timeIntervalSince(self.voiceStarted)*1000)) mode=merge")}
             else {voiceMaxGap=max(voiceMaxGap,received.timeIntervalSince(lastAudio))}
@@ -557,6 +568,8 @@ final class Engine {
                 active=true;ending=false;voiceTailDeadline=nil;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
                 voiceStarted=Date();voiceInitialPackets=state.packets;voiceInitialDropped=state.dropped;voiceMaxGap=0
                 voiceWiFiPackets=0;voiceBLEPackets=0
+                voiceObservedAt=nil
+                voiceActivity=ProcessInfo.processInfo.beginActivity(options:Self.voiceActivityOptions,reason:"Streaming microphone audio to the input method")
                 if let session {voiceMerge=VoiceMerge(session:session);startVoiceClock()}
                 voiceLoss.reset(now:voiceStarted)
                 voiceLog.info("Voice started transport=\(self.transport.rawValue,privacy:.public)")
@@ -694,14 +707,15 @@ final class Engine {
         generation+=1;let expected=generation
         let stop={ [self] in
             guard generation==expected else { return }
+            if let activity=voiceActivity {ProcessInfo.processInfo.endActivity(activity);voiceActivity=nil}
             keyboard.stop();sink.stop();active=false;ending=false;sequence=nil
             let allowEnter=(reason=="device-ended" || reason=="new-session") && authenticated && !paused && !powerSuspended && Shortcut.permitted
             for _ in 0..<voiceEnter.take(allowed:allowEnter) {keyboard.enter()}
             voiceClock?.cancel();voiceClock=nil
             if let merge=voiceMerge {
-                voiceLog.info("Voice merge accepted=\(merge.accepted) duplicate=\(merge.duplicates) late=\(merge.late) recovered=\(merge.recovered) missing=\(merge.missing) resync=\(merge.resyncs) wifi_copies=\(merge.wifiCopies) ble_copies=\(merge.bleCopies) rescued=\(merge.rescued) extra_delay_ms=\(Int(merge.extraDelay*1000))")
+                voiceLog.info("Voice merge accepted=\(merge.accepted) received=\(merge.received) duplicate=\(merge.duplicates) late=\(merge.late) late_first=\(merge.lateFirst) recovered=\(merge.recovered) missing=\(merge.missing) resync=\(merge.resyncs) wifi_copies=\(merge.wifiCopies) ble_copies=\(merge.bleCopies) rescued=\(merge.rescued) extra_delay_ms=\(Int(merge.extraDelay*1000))")
             }
-            voiceMerge=nil;voiceTailDeadline=nil
+            voiceMerge=nil;voiceTailDeadline=nil;voiceObservedAt=nil
             voiceLog.info("Voice stopped packets=\(self.state.packets-self.voiceInitialPackets) dropped=\(self.state.dropped-self.voiceInitialDropped) max_gap_ms=\(Int(self.voiceMaxGap*1000)) immediate=\(immediate) reason=\(reason,privacy:.public) wifi_packets=\(self.voiceWiFiPackets) ble_packets=\(self.voiceBLEPackets) silence_ms=\(Int(Date().timeIntervalSince(self.lastAudio)*1000))")
             publish()
         }
@@ -764,6 +778,7 @@ final class Engine {
         if interrupted { DispatchQueue.main.async { self.onResult?(false,message) } }
     }
     static func testVoiceMerge(_ check:(Bool,String)->Void) {
+        check(!voiceActivityOptions.contains(.idleSystemSleepDisabled) && !voiceActivityOptions.contains(.idleDisplaySleepDisabled),"voice precision does not prevent system or display sleep")
         let engine=Engine(preview:true)
         engine.work.sync {
             engine.device="aabbccddeeff";engine.authenticated=true;engine.active=true
@@ -792,8 +807,9 @@ final class Engine {
             engine.handle(["event":"key.action","action":"enter","eid":5])
             check(engine.voiceEnter.pending==2,"two distinct Enter events queue during tail; mirrored copies do not duplicate")
             engine.startVoiceClock();check(engine.voiceClock != nil,"active merge owns its playout timer")
+            engine.voiceActivity=ProcessInfo.processInfo.beginActivity(options:voiceActivityOptions,reason:"Testing scoped voice timing")
             engine.endVoice(immediate:true,reason:"test-disconnect")
-            check(!engine.active && engine.voiceMerge==nil && engine.voiceClock==nil && engine.voiceTailDeadline==nil && engine.voiceEnter.pending==0,"disconnect releases merge timer, audio and queued Enter immediately")
+            check(!engine.active && engine.voiceMerge==nil && engine.voiceClock==nil && engine.voiceTailDeadline==nil && engine.voiceEnter.pending==0 && engine.voiceActivity==nil,"disconnect releases merge timer, audio, timing activity and queued Enter immediately")
             wire[1]=1;engine.processPacket(wire,from:lan,viaBLE:false)
             check(!engine.active && engine.voiceMerge==nil,"late audio cannot automatically restart input")
         }
