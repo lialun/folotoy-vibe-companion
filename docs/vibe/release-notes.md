@@ -1,28 +1,23 @@
 **English** · [简体中文](release-notes.zh_CN.md)
 
-# Vibe Companion v0.9.0
+# Vibe Companion v0.9.1
 
 ## New in this release
 
-Agent quotas join voice input and task alerts on your desk. The companion collects
-Codex, Claude Code and OpenCode Go allowances from existing Agent integrations,
-including remaining percentages and reset times. Go keeps its five-hour, weekly
-and monthly windows separate rather than presenting a currency balance.
+This update improves the Mac app's sleep and wake lifecycle. System sleep blocks
+new device work immediately, releases held shortcut keys, and stops Bluetooth
+scanning/connections, LAN retries, audio and quota polling. Network/audio cleanup
+runs on its owning queue instead of blocking the sleep notification handler.
 
-Quota pages come before weather and share a consistent global page counter.
-Three percentage windows fit one page. Collection normally runs every five
-minutes during recent activity, stops after ten idle minutes and backs off on
-failure. A sample expires after fifteen minutes thirty seconds; reconnects do
-not renew it. Unavailable data does not create an error card.
+System wake restores communication independently of display state. Manual
+disconnect intent survives sleep and automatic permission reloads; stale timers
+and callbacks cannot reconnect or disconnect a newer session. Interrupted quota
+queries become eligible after wake while completed polls keep their normal
+interval and genuine failures keep their backoff. Pending radio-list writes are
+cancelled before their connection closes.
 
-The desktop app adds **Connect your own Agent**. Copy its prompt to integrate
-local task alerts and real quota observations through the account-private
-helper. Custom Agents keep their own display names; no conversation text or
-credentials are sent to the device. See the source guides for field limits and
-callback requirements.
-
-This release also improves Bluetooth notification handling when the operating
-system changes an unrelated subscription. Use the matching firmware and app.
+The device firmware's functional behavior is unchanged from v0.9.0. Existing
+v0.9.0 devices can use the new desktop app without reflashing or re-pairing.
 
 ## Included
 
@@ -38,7 +33,8 @@ system changes an unrelated subscription. Use the matching firmware and app.
 
 ## Install and update
 
-Install the firmware and app from this same release. See `INSTALL.txt` or
+For an existing v0.9.0 setup, replace the desktop app and reopen it. New setups
+can use both packages from this release. See `INSTALL.txt` or
 `INSTALL.zh_CN.txt` for installation, permissions, input-method setup and
 connection. Update existing Agent integrations where the app offers it; restart
 or reload the Agent session and complete any trust prompt inside that Agent.
@@ -60,19 +56,18 @@ On macOS, run `bash macos/build.sh` for the universal app, native tests, DMG and
 
 ## Validation scope
 
-Local checks cover the firmware build, host/native tests, actual-font LVGL
-renders in both themes, live Codex quotas, installed custom-helper callbacks,
-and physical Wi-Fi/BLE quota acceptance, retry expiry and conditional clearing.
-The installed custom notification was acknowledged by the device, and its quota
-sample appeared in the desktop app and expired without renewal.
+The committed implementation passed the complete repository/firmware gate and
+native Mac regressions for sleep admission, repeated wake, deferred callbacks,
+held-key release, permission-session preservation, quota-subprocess cancellation
+and radio-list abort delivery. The universal app also passed packaged radio
+codec/network tests. Publication is gated by the corresponding GitHub Actions
+checks, firmware build and universal Mac build.
 
-Claude Code and OpenCode Go adapters were checked with interface/response
-fixtures; live subscriptions for those two services were not available locally.
-The new three-window device view has rendered-font coverage but no separate
-physical visual confirmation. Power/battery, clean-system installation, physical
-Apple Silicon/minimum macOS, and physical multiple-computer/device tests remain
-outside the completed local scope. Earlier voice, Enter, radio/resume, re-pairing
-and phone Wi-Fi acceptance are recorded in the previous release.
+Real lid-close sleep/temperature behavior, clean-system installation, physical
+Apple Silicon/minimum macOS and multiple physical computers/devices were not
+verified for this update. Automated checks do not establish the cause of every
+reported overheating incident or replace physical sleep acceptance. Earlier
+functional and quota acceptance is recorded in v0.9.0 and v0.8.4.
 
 The current desktop client supports macOS. One device authorizes one computer
 at a time; a confirmed handover replaces that authorization. Keep the computer

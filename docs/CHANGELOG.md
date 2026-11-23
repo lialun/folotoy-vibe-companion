@@ -12,6 +12,12 @@
 
 ## Unreleased
 
+## v0.9.1 - 2026-11-23
+
+- Suspend Bluetooth scanning/connections, LAN retries, audio and quota polling when the computer sleeps, without waiting for network or audio cleanup on the sleep notification thread.
+- Resume on system wake independently of display state; keep manual disconnect intent and prevent stale callbacks from reopening or disconnecting a newer session.
+- Release held input keys before sleep, cancel pending radio-list writes before closing their transport, and allow sleep-interrupted quota queries to retry after wake without changing successful polling intervals or failure backoff.
+
 ## v0.9.0 - 2026-11-18
 
 - Add automatic remaining-quota cards for Codex, Claude Code and OpenCode Go using existing Agent logins. Collect during recent activity; hide unavailable or stale observations without interrupting the user.
