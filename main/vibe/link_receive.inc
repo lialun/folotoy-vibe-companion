@@ -46,6 +46,25 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
         (approved || (authenticated && owner_client[0] && !strcmp(owner_client,client)));
     bool same_client=vibe_connect_identity(client) && owner_client[0] && !strcmp(owner_client,client);
     bool occupied=owner_seen && now-owner_seen<vibe_peer_timeout(s.heartbeat);
+    if(type && !strcmp(type,"voice.repair")) {
+        /* Repairs cannot claim a lease or enter the UI command queue. Only the
+         * current authenticated endpoint may request this recording's cache. */
+        bool endpoint=via_ble?ble_owner && vibe_peer_matches(ble_peer.sin_addr.s_addr,ble_peer.sin_port,from->sin_addr.s_addr,from->sin_port):
+            vibe_peer_matches(peer.sin_addr.s_addr,peer.sin_port,from->sin_addr.s_addr,from->sin_port);
+        bool allowed=packet[0]==2 && addressed && authenticated && same_client && occupied && endpoint && !release_after_send;
+        generation=owner_generation;
+        xSemaphoreGive(peer_mutex);xSemaphoreGive(v_mutex);
+        uint32_t frames[4];unsigned count=0;bool valid=true;
+        const cJSON *items=cJSON_GetObjectItemCaseSensitive(o,"frames");
+        if(!cJSON_IsArray(items) || cJSON_GetArraySize(items)<1 || cJSON_GetArraySize(items)>4)valid=false;
+        if(valid)for(const cJSON *item=items->child;item;item=item->next) {
+            if(!cJSON_IsNumber(item) || !(item->valuedouble>=0 && item->valuedouble<VIBE_VOICE_MAX_FRAMES) ||
+               item->valuedouble!=(double)(uint32_t)item->valuedouble){valid=false;break;}
+            frames[count++]=(uint32_t)item->valuedouble;
+        }
+        if(allowed && valid)(void)voice_repair_request(vibe_voice_parse_session(link_string(o,"voiceSession")),frames,count,generation);
+        cJSON_Delete(o);return;
+    }
     if (pair && vibe_message_post_link_json(v_queue,(const char *)packet+1,n-1,0)) {
         if (approved) { commit_peer=*from;commit_ble=via_ble; }
     } else if (addressed && authenticated && (!occupied || same_client) && vibe_connect_identity(client)) {

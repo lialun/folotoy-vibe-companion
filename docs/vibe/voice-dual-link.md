@@ -71,19 +71,60 @@ radio playback and configuration protocols retain their existing behavior.
 
 ## Desktop merge and lifecycle
 
+### Single-link loss repair
+
+An authenticated desktop advertises `voiceRepair: 1` in `pc.status`. For a V2
+recording, firmware allocates a four-block compressed history on demand, leaving
+at least 12 KiB of free 8-bit heap at admission. Allocation can fall back to two
+blocks or disable repair without preventing voice input. `voice.start` reports
+the actual history capacity in `voiceRepair` and an authenticated attachment
+mask in `voiceLinks` (Wi-Fi bit 1, BLE bit 2). Older peers retain their previous
+behavior. The history uses less than 3.6 KiB with four slots, is reused across an
+immediate new recording, and is released after a 450 ms end grace or ownership
+change. No history allocation, acknowledgement timer or extra task runs at idle.
+
+With no successful BLE fallback, UDP `ENOMEM`, `ENOBUFS` and would-block errors
+enter a local retry schedule: at most eight attempts, at least 20 ms between
+failed attempts, and no attempt starts after the frame's original 200 ms age.
+The capture task never waits for those retries. Queue admission is not delivery.
+
+For packets accepted by the transport but missing at the computer, the desktop
+requests only missing sequences in the current playout window, including first
+and final blocks. `voice.repair` carries the existing device/client/token fields,
+the sixteen-digit `voiceSession`, and one to four integer `frames`. Only the
+current authenticated endpoint may request repairs; requests cannot claim a
+lease, refresh its lifetime, or enter the application command queue. The device
+rejects expired, overwritten and previous-session history. Mirrored requests are
+coalesced, with a 60 ms cooldown and two request tickets per cached frame.
+
+The desktop sends at most one request every 60 ms and two per missing sequence.
+A failed repair submission can retry three times within the frame's original
+400 ms age. The existing network worker sends repairs and polls at 20 ms during
+recording. Healthy reception generates no repair requests. Local submission rejection refunds request credit while preserving the global cadence. Repair copies use the
+same type-6 wire format and are deduplicated before decode. All request state is
+disposed on stop, sleep, disconnect, permission loss or a new recording.
+
+Wi-Fi and dual-link recordings retain the 120 ms startup prefill. A negotiated
+BLE-only recording uses 160 ms to allow the feedback round trip for a two-block
+burst. Additional rescue waiting remains capped at 200 ms per recording, giving
+320 ms or 360 ms of intentional buffering, excluding capture, transport and
+system output time. Sustained outages beyond those finite limits remain losses;
+repair never creates an unbounded audio backlog or automatically restarts input.
+
 The desktop validates the header and ADPCM block before admitting it to the
 current recording. A compressed reorder window holds at most eight blocks.
 The first copy of a sequence wins; later copies do not decode or refresh the
-voice watchdog. Playback begins after a 120 ms prefill and advances at 100 ms
-per block, using a 20 ms timer only while recording. This adds a deliberate
-120 ms recovery budget to audio latency. Missing leading blocks are skipped at
-the first deadline; a block repaired during prefill can still play.
+voice watchdog. Playback begins after the 120 ms prefill (160 ms for negotiated
+BLE-only repair) and advances at 100 ms per block, using a 20 ms timer only while
+recording. Without repair, missing leading blocks are skipped at the first
+deadline. With repair, leading holes still present in device history can use
+the same bounded rescue budget as an interior hole.
 
 After playout begins, a missing block can spend up to 200 ms of additional
 waiting across the entire recording. The output naturally pauses while waiting;
 a first copy arriving in that interval preserves the speech instead of deleting
 it. Total prefill plus rescue waiting is capped at 320 ms, excluding capture,
-transport and system output time. The budget never resets at every lost block.
+transport and system output time (360 ms for BLE-only repair). The budget never resets at every lost block.
 Once exhausted, missing blocks become silence and late copies are discarded. Large sequence gaps and scheduler delays resynchronize the
 bounded window instead of replaying seconds of stale speech. Terminal counts
 stop synthetic silence and size the final drain grace, capped at one second.

@@ -31,6 +31,7 @@ final class Engine {
     private var voiceLoss=VoiceLossWindow()
     private var voiceWiFiPackets=0,voiceBLEPackets=0
     private var voiceMerge:VoiceMerge?,voiceClock:DispatchSourceTimer?
+    private var voiceRepair:VoiceRepairTracker?
     private var voiceEvents=VoiceSessionEvents()
     private var voiceEventScope=""
     private var voiceTailDeadline:TimeInterval?
@@ -263,9 +264,11 @@ final class Engine {
         }
         voiceLoss.reset(now:Date())
     }
-    private func sendOnAvailableLinks(_ body:[String:Any],type:UInt8=2) {
-        if let found=discovery.devices[device],found.hasWiFi { _=send(body,type:type,to:found.endpoint) }
-        if bluetooth?.isActive==true { _=send(body,type:type,viaBLE:true) }
+    @discardableResult private func sendOnAvailableLinks(_ body:[String:Any],type:UInt8=2)->Bool {
+        var sent=false
+        if let found=discovery.devices[device],found.hasWiFi { if send(body,type:type,to:found.endpoint){sent=true} }
+        if bluetooth?.isActive==true { if send(body,type:type,viaBLE:true){sent=true} }
+        return sent
     }
     func disconnectDevice() { paused=true;work.async {
         if self.authenticated { self.send(["type":"pc.disconnect","token":self.token,"device":self.device,"client":self.clientID]) }
@@ -315,10 +318,10 @@ final class Engine {
             var sent=false
             for dest in destinations() { if send(body,type:3,to:dest) { sent=true } }
             if !sent && transport == .wifi { state.error="局域网发送失败，请检查网络和局域网权限" }
-        } else if !paused { body["device"]=device;body["client"]=clientID;body["primaryTransport"]=transport.rawValue;body["voiceV2"]=1;body["radioPCM"]=1;body["radioFormats"]=RadioFormat.supportedMask;sendOnAvailableLinks(body,type:3) }
+        } else if !paused { body["device"]=device;body["client"]=clientID;body["primaryTransport"]=transport.rawValue;body["voiceV2"]=1;body["voiceRepair"]=1;body["radioPCM"]=1;body["radioFormats"]=RadioFormat.supportedMask;sendOnAvailableLinks(body,type:3) }
     }
     private func sendStatus() {
-        if !token.isEmpty { send(["type":"pc.status","token":token,"voiceV2":1,"radioPCM":1,"radioFormats":RadioFormat.supportedMask,"audioReady":audioAvailable,"hotkeyReady":Shortcut.permitted,"epoch":Int(Date().timeIntervalSince1970),"tz":TimeZone.current.secondsFromGMT()/60,"idleHeartbeat":LANSocket.negotiatedHeartbeatSeconds]) }
+        if !token.isEmpty { send(["type":"pc.status","token":token,"voiceV2":1,"voiceRepair":1,"radioPCM":1,"radioFormats":RadioFormat.supportedMask,"audioReady":audioAvailable,"hotkeyReady":Shortcut.permitted,"epoch":Int(Date().timeIntervalSince1970),"tz":TimeZone.current.secondsFromGMT()/60,"idleHeartbeat":LANSocket.negotiatedHeartbeatSeconds]) }
     }
     func updateAgentQuotas(_ samples:[AgentQuotaSample]) { work.async {
         let next=Dictionary(uniqueKeysWithValues:samples.map{($0.agent,$0)})
@@ -490,6 +493,7 @@ final class Engine {
             guard authenticated,active else {return}
             let now=ProcessInfo.processInfo.systemUptime,before=voiceMerge?.received ?? 0
             let admitted=voiceMerge?.accept(frame,via:viaBLE ? .bluetooth:.wifi,now:now)==true
+            requestVoiceRepair(now:now)
             if let observed=voiceMerge?.received,observed>before {
                 if let previous=voiceObservedAt,now-previous>0.25 {
                     voiceLog.info("Voice arrival gap_ms=\(Int((now-previous)*1000)) sequence=\(frame.sequence) via_ble=\(viaBLE) admitted=\(admitted) next=\(self.voiceMerge?.next ?? 0)")
@@ -570,7 +574,18 @@ final class Engine {
                 voiceWiFiPackets=0;voiceBLEPackets=0
                 voiceObservedAt=nil
                 voiceActivity=ProcessInfo.processInfo.beginActivity(options:Self.voiceActivityOptions,reason:"Streaming microphone audio to the input method")
-                if let session {voiceMerge=VoiceMerge(session:session);startVoiceClock()}
+                voiceRepair=nil
+                if let session {
+                    let value=body["voiceRepair"] as? Int ?? 0
+                    let history=(2...4).contains(value) ? value:0
+                    let links=body["voiceLinks"] as? Int
+                    let bleOnly=history>0 && (links.map{$0==2} ?? (Date().timeIntervalSince(wifiLastSeen)>=ConnectionTiming.linkFresh))
+                    voiceMerge=VoiceMerge(session:session,repairHistory:history,prefill:bleOnly ? VoiceMerge.bleRepairPrefill:nil)
+                    if history>0 {
+                        voiceRepair=VoiceRepairTracker(started:ProcessInfo.processInfo.systemUptime,history:history)
+                    }
+                    startVoiceClock()
+                }
                 voiceLoss.reset(now:voiceStarted)
                 voiceLog.info("Voice started transport=\(self.transport.rawValue,privacy:.public)")
             }
@@ -582,6 +597,7 @@ final class Engine {
                       voiceEvents.accept(id:id) else {return}
                 guard voiceMerge?.session==session else {return}
                 voiceMerge?.finish(frames:UInt32(frames))
+                requestVoiceRepair(now:ProcessInfo.processInfo.systemUptime)
             } else if voiceMerge != nil {return}
             endVoice(immediate:false,reason:"device-ended")
         case "key.action":
@@ -681,6 +697,13 @@ final class Engine {
         settingsRevision=(body["settingsRevision"] as? NSNumber)?.uint32Value
         let value=prefs,source=device;DispatchQueue.main.async { self.onSettings?(value,source) }
     }
+    private func requestVoiceRepair(now:TimeInterval) {
+        guard active,!powerSuspended,authenticated,!paused,!token.isEmpty,let merge=voiceMerge else{return}
+        guard let frames=voiceRepair?.request(merge,now:now),!frames.isEmpty else{return}
+        if !sendOnAvailableLinks(["type":"voice.repair","token":token,"voiceSession":String(format:"%016llx",merge.session),"frames":frames.map{Int($0)}]) {
+            voiceRepair?.submissionFailed(frames,now:now)
+        }
+    }
     private func startVoiceClock() {
         voiceClock?.cancel()
         let clock=DispatchSource.makeTimerSource(queue:work)
@@ -688,6 +711,7 @@ final class Engine {
         clock.setEventHandler { [weak self] in
             guard let self=self,!self.powerSuspended,self.active else {return}
             let before=self.voiceMerge?.missing ?? 0
+            self.requestVoiceRepair(now:ProcessInfo.processInfo.systemUptime)
             guard let frames=self.voiceMerge?.drain(now:ProcessInfo.processInfo.systemUptime) else {return}
             self.state.dropped+=(self.voiceMerge?.missing ?? 0)-before
             for frame in frames {
@@ -715,7 +739,8 @@ final class Engine {
             if let merge=voiceMerge {
                 voiceLog.info("Voice merge accepted=\(merge.accepted) received=\(merge.received) duplicate=\(merge.duplicates) late=\(merge.late) late_first=\(merge.lateFirst) recovered=\(merge.recovered) missing=\(merge.missing) resync=\(merge.resyncs) wifi_copies=\(merge.wifiCopies) ble_copies=\(merge.bleCopies) rescued=\(merge.rescued) extra_delay_ms=\(Int(merge.extraDelay*1000))")
             }
-            voiceMerge=nil;voiceTailDeadline=nil;voiceObservedAt=nil
+            if let repair=voiceRepair {voiceLog.info("Voice repair requests=\(repair.sent) local_rejected=\(repair.rejected)")}
+            voiceRepair=nil;voiceMerge=nil;voiceTailDeadline=nil;voiceObservedAt=nil
             voiceLog.info("Voice stopped packets=\(self.state.packets-self.voiceInitialPackets) dropped=\(self.state.dropped-self.voiceInitialDropped) max_gap_ms=\(Int(self.voiceMaxGap*1000)) immediate=\(immediate) reason=\(reason,privacy:.public) wifi_packets=\(self.voiceWiFiPackets) ble_packets=\(self.voiceBLEPackets) silence_ms=\(Int(Date().timeIntervalSince(self.lastAudio)*1000))")
             publish()
         }
@@ -806,13 +831,43 @@ final class Engine {
             engine.handle(["event":"key.action","action":"enter","eid":4])
             engine.handle(["event":"key.action","action":"enter","eid":5])
             check(engine.voiceEnter.pending==2,"two distinct Enter events queue during tail; mirrored copies do not duplicate")
+            engine.voiceRepair=VoiceRepairTracker(started:0,history:4)
             engine.startVoiceClock();check(engine.voiceClock != nil,"active merge owns its playout timer")
             engine.voiceActivity=ProcessInfo.processInfo.beginActivity(options:voiceActivityOptions,reason:"Testing scoped voice timing")
             engine.endVoice(immediate:true,reason:"test-disconnect")
-            check(!engine.active && engine.voiceMerge==nil && engine.voiceClock==nil && engine.voiceTailDeadline==nil && engine.voiceEnter.pending==0 && engine.voiceActivity==nil,"disconnect releases merge timer, audio, timing activity and queued Enter immediately")
+            check(!engine.active && engine.voiceMerge==nil && engine.voiceRepair==nil && engine.voiceClock==nil && engine.voiceTailDeadline==nil && engine.voiceEnter.pending==0 && engine.voiceActivity==nil,"disconnect releases merge timer, repair tracker, audio, timing activity and queued Enter immediately")
             wire[1]=1;engine.processPacket(wire,from:lan,viaBLE:false)
             check(!engine.active && engine.voiceMerge==nil,"late audio cannot automatically restart input")
         }
+        do {
+            let receiver=try LANSocket.open(),sender=try LANSocket.open()
+            defer {Darwin.close(receiver.descriptor);Darwin.close(sender.descriptor)}
+            let repair=Engine(preview:true)
+            repair.device="aabbccddeeff";repair.clientID="11111111-1111-1111-1111-111111111111"
+            repair.token=String(repeating:"a",count:64);repair.authenticated=true;repair.active=true
+            var endpoint=Self.bleEndpoint;endpoint.sin_port=receiver.port.bigEndian
+            _=repair.discovery.accept(["event":"device.hello","device":repair.device,"paired":true],from:endpoint)
+            repair.peer=endpoint;repair.socketFD=sender.descriptor
+            repair.voiceMerge=VoiceMerge(session:1,repairHistory:4)
+            _=repair.voiceMerge?.accept(VoiceFrame(session:1,sequence:1,block:Data(repeating:0,count:804)),via:.wifi,now:0)
+            repair.voiceRepair=VoiceRepairTracker(started:0,history:4);repair.requestVoiceRepair(now:0.01)
+            var bytes=[UInt8](repeating:0,count:2048)
+            var count=Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)
+            let receiveDeadline=Date().addingTimeInterval(0.2)
+            while count<0,Date()<receiveDeadline {usleep(1000);count=Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)}
+            let body=count>1 ? (try? JSONSerialization.jsonObject(with:Data(bytes[1..<count]))) as? [String:Any]:nil
+            if body?["type"] as? String != "voice.repair" {
+                fputs("Repair test diagnostics: bytes=\(count) requests=\(repair.voiceRepair?.sent ?? -1) candidates=\(repair.voiceMerge?.repairCandidates(now:0.01,started:0,history:4) ?? []) wifi=\(repair.discovery.devices[repair.device]?.hasWiFi ?? false) errno=\(errno)\n",stderr)
+            }
+            check(body?["type"] as? String=="voice.repair" && body?["voiceSession"] as? String=="0000000000000001" &&
+                  body?["frames"] as? [Int]==[0] && body?["token"] as? String==repair.token && body?["client"] as? String==repair.clientID,
+                  "real UDP repair request carries the exact session, missing sequence and existing authorization")
+            repair.requestVoiceRepair(now:0.02)
+            check(Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)<0,"request rate limit applies to the real send path")
+            repair.lifecycle.suspend();repair.requestVoiceRepair(now:0.2)
+            check(Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)<0,"sleep cannot emit queued repair traffic")
+            repair.endVoice(immediate:true,reason:"test-finished");repair.socketFD = -1
+        } catch {check(false,"voice repair UDP integration: \(error.localizedDescription)")}
     }
     static func testConnections(_ check:(Bool,String)->Void) {
         let engine=Engine(preview:true)

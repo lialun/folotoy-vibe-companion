@@ -4,6 +4,7 @@
 #include "ble.h"
 #include "ble_ingress.h"
 #include "voice_copy.h"
+#include "voice_history.h"
 #include "radio/remote.h"
 #include "radio/stream.h"
 #include "wifi_profiles.h"
@@ -15,6 +16,7 @@
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
@@ -149,7 +151,7 @@ void vibe_network_commit(const char *client) {
     ++owner_generation;release_after_send=false;
     xSemaphoreGive(peer_mutex);
     v_status.peer_seen_ms=vibe_now();v_status.ble_peer=commit_ble;
-    v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.radio_pcm=false;v_status.voice_v2=false;
+    v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.radio_pcm=false;v_status.voice_v2=false;v_status.voice_repair=false;
 }
 void vibe_send_json(const char *s) {
     if (!tx_queue || strlen(s)>VIBE_JSON_MAX) return;
@@ -609,7 +611,7 @@ static void network_task(void *arg) {
         voice_copy_flush();
         static unsigned char packet[VIBE_JSON_MAX+2]; struct sockaddr_in from; socklen_t len=sizeof(from);
         vibe_model_t power;vibe_snapshot(&power,NULL,NULL);
-        unsigned wait_ms=(s.audio_busy && power.radio_active && power.radio_requested)?20:ap_started?100:power.recording?50:power.screen_on?200:
+        unsigned wait_ms=(s.audio_busy && power.radio_active && power.radio_requested)?20:ap_started?100:power.recording?20:power.screen_on?200:
             (!s.wifi || testing_credentials || auto_connection.pending)?1000:30000;
         /* BLE host callbacks only enqueue; a bounded poll avoids calling into
          * lwIP from inside NimBLE or waiting 30 seconds for the first packet. */

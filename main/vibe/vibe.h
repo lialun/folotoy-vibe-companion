@@ -21,7 +21,7 @@ extern "C" {
 typedef struct {
     vibe_connection_request_t connection_request;
     bool ble_peer, wifi, peer, audio_ready, hotkey_ready, audio_busy, audio_fault, provisioning;
-    bool radio_playing, radio_loading, radio_pcm, voice_v2;
+    bool radio_playing, radio_loading, radio_pcm, voice_v2, voice_repair;
     unsigned radio_state;
     char radio_name[64], radio_description[96],radio_error[64];
     vibe_weather_t forecast;
@@ -54,6 +54,9 @@ uint32_t vibe_network_generation(void);
 int vibe_send_audio(const void *data, size_t len);
 /* V2 uplink: immediate UDP plus a bounded, independently drained BLE copy. */
 int vibe_send_voice(const void *data,size_t len,uint32_t owner);
+unsigned vibe_voice_begin(uint64_t session,uint32_t owner,bool repair);
+unsigned vibe_voice_links(uint32_t owner);
+void vibe_voice_end(uint64_t session,uint32_t owner);
 void vibe_voice_report(void);
 esp_err_t vibe_network_init(void);
 void vibe_network_wake(void);

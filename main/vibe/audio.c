@@ -77,7 +77,8 @@ static void capture(int16_t *pcm) {
         portENTER_CRITICAL(&request_mux);uint64_t requested=voice_requested_at;portEXIT_CRITICAL(&request_mux);
         if (requested) ESP_LOGI(TAG,"Voice capture ready: latency_ms=%llu",(unsigned long long)(vibe_now()-requested));
         if (v2) {
-            snprintf(event,sizeof(event),"{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\"}",(unsigned long long)session);
+            unsigned repair=vibe_voice_begin(session,owner,s.voice_repair);
+            snprintf(event,sizeof(event),"{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"voiceRepair\":%u,\"voiceLinks\":%u}",(unsigned long long)session,repair,vibe_voice_links(owner));
             vibe_send_json(event);
         } else vibe_send_json("{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\"}");
         started=true;
@@ -106,6 +107,7 @@ static void capture(int16_t *pcm) {
         /* V2 binds the terminal count to this recording; a late end from an
          * earlier recording cannot stop the next one. The Mac drains its FIFO. */
         if (v2) {
+            vibe_voice_end(session,owner);
             snprintf(event,sizeof(event),"{\"event\":\"voice.end\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"frames\":%u}",(unsigned long long)session,captured);
             vibe_send_json(event);
         } else vibe_send_json("{\"event\":\"voice.end\"}");

@@ -123,5 +123,68 @@ enum VoiceMergeTests {
         }
         check(played==Array(UInt32(0)..<100) && delayed.missing==0,"shared 250/300 ms delay recovers every block once")
         check(delayed.extraDelay<=0.2 && delayed.rescued>=2,"adaptive latency has one fixed per-recording budget")
+
+        var requests=VoiceRepairTracker(started:0,history:4)
+        var repair=VoiceMerge(session:session,repairHistory:4)
+        check(requests.request(repair,now:0.17).isEmpty,"do not request a first frame before capture can produce it")
+        check(requests.request(repair,now:0.18)==[0],"missing first frame can request repair without another audio arrival")
+        check(requests.request(repair,now:0.2).isEmpty && requests.request(repair,now:0.27)==[0],"repair request cadence is bounded")
+        check(requests.request(repair,now:0.4).isEmpty,"each missing sequence has at most two request tickets")
+        var rejected=VoiceRepairTracker(started:0,history:4)
+        let failed=rejected.request(repair,now:0.18);rejected.submissionFailed(failed,now:0.18)
+        check(rejected.sent==0 && rejected.rejected==1 && rejected.request(repair,now:0.2).isEmpty,"local rejection refunds request credit without a retry storm")
+        check(rejected.request(repair,now:0.27)==[0] && rejected.request(repair,now:0.36)==[0],"both delivery attempts remain after a local submission failure")
+        var tail=VoiceMerge(session:session,repairHistory:4)
+        _=tail.accept(frame(0),via:.wifi,now:0);tail.finish(frames:2)
+        var tailRequests=VoiceRepairTracker(started:0,history:4)
+        check(tailRequests.request(tail,now:0.02)==[1],"terminal count repairs a missing final block")
+        _=tail.accept(frame(1),via:.wifi,now:0.1)
+        check(tail.drain(now:0.12).count==1 && tail.drain(now:0.22).count==1 && tail.missing==0,"tail repair plays once before queued Enter")
+        var small=VoiceMerge(session:session,repairHistory:2)
+        _=small.accept(frame(3),via:.bluetooth,now:0)
+        var smallRequests=VoiceRepairTracker(started:0,history:2)
+        check(smallRequests.request(small,now:0.01)==[2],"two-frame fallback never requests overwritten history")
+        var noFrames=VoiceMerge(session:session,repairHistory:4);noFrames.finish(frames:0)
+        var noRequests=VoiceRepairTracker(started:0,history:4)
+        check(noRequests.request(noFrames,now:1).isEmpty,"zero-length recording never starts repair traffic")
+
+        // A single usable link, including first/final loss, with real feedback
+        // delay. Compare identical losses through the production merge policy.
+        for via in [ConnectionTransport.wifi,.bluetooth] {
+            let count:UInt32=120,roundTrip:Double=via == .wifi ? 0.045:0.13
+            var merged=VoiceMerge(session:session,repairHistory:4,prefill:via == .bluetooth ? VoiceMerge.bleRepairPrefill:nil)
+            var tracker=VoiceRepairTracker(started:0,history:4)
+            var arrivals:[(Double,UInt32)]=[],played:[UInt32]=[]
+            for seq in UInt32(0)..<count where seq%17>1 && seq != count-1 {arrivals.append((Double(seq)*0.1+0.01,seq))}
+            var nextArrival=0
+            for tick in 0...6500 {
+                let now=Double(tick)*0.002
+                while nextArrival<arrivals.count,arrivals[nextArrival].0<=now {
+                    _=merged.accept(frame(arrivals[nextArrival].1),via:via,now:now);nextArrival+=1
+                }
+                if now>=Double(count)*0.1 {merged.finish(frames:count)}
+                let requested=tracker.request(merged,now:now)
+                for seq in requested where Double(seq)*0.1<=now && now-Double(seq)*0.1<=0.35 {
+                    arrivals.append((now+roundTrip,seq))
+                }
+                if !requested.isEmpty {
+                    let pending=arrivals[nextArrival...].sorted{$0.0<$1.0}
+                    arrivals=Array(arrivals[..<nextArrival])+pending
+                }
+                for out in merged.drain(now:now) {if case .audio(let f,_)=out {played.append(f.sequence)}}
+                check(merged.buffered<=8 && merged.extraDelay<=0.200001,"single-link repairs retain memory and latency bounds")
+            }
+            check(played==Array(UInt32(0)..<count) && merged.missing==0,"single-link feedback restores leading, interior and trailing loss")
+            check(tracker.sent>0 && tracker.sent<50,"repair does not create unbounded acknowledgement traffic")
+        }
+        // Perfect reception has no acknowledgement chatter on either link.
+        repair=VoiceMerge(session:session,repairHistory:4);requests=VoiceRepairTracker(started:0,history:4)
+        for tick in 0...1100 {
+            let now=Double(tick)*0.01
+            if tick%10==0 && tick<1000 {_=repair.accept(frame(UInt32(tick/10)),via:.bluetooth,now:now)}
+            if tick>=1000 {repair.finish(frames:100)}
+            _=requests.request(repair,now:now);_=repair.drain(now:now)
+        }
+        check(requests.sent==0,"healthy single-link audio sends no repair requests")
     }
 }

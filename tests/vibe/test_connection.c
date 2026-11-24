@@ -1,6 +1,7 @@
 #include "peer.h"
 #include "radio/stream.h"
 #include "connection_request.h"
+#include "voice_history.h"
 #include "cJSON.h"
 #include <assert.h>
 #include <arpa/inet.h>
@@ -21,6 +22,11 @@ static uint64_t last_sent_ms;
 static char owner_client[37],posted[1537],reply[256];
 static unsigned post_count,hello_count;
 static uint32_t posted_generation;
+static unsigned repair_count;
+static bool voice_repair_request(uint64_t session,const uint32_t *frames,unsigned count,uint32_t owner) {
+    if(!session)return false;
+    assert(frames && count && count<=4 && owner==owner_generation);++repair_count;return true;
+}
 static bool hello_authorized,hello_checked;
 static struct { bool ble_peer,provisioning;uint64_t peer_seen_ms;char token[65];vibe_connection_request_t connection_request; } v_status;
 static struct { bool recording; } v_model;
@@ -89,6 +95,18 @@ int main(void) {
     process_packet(media,sizeof(media),&ble,true);assert(media_count==before_media+1);
     uint32_t generation=owner_generation;
     receive(3,auth,ble,true);assert(hello_authorized && ble_owner && peer.sin_port==a.sin_port && owner_generation==generation);
+    char repair[512];unsigned posted_before_repair=post_count,repairs_before=repair_count;
+    const char *repair_frames[]={"[1,2]","[]","[0.5]","[-1]","[2000]","[null]","[1,2,3,4,5]","1","[1e999]"};
+    for(unsigned i=0;i<sizeof(repair_frames)/sizeof(repair_frames[0]);i++) {
+        snprintf(repair,sizeof(repair),"{\"type\":\"voice.repair\",\"client\":\"%s\",\"device\":\"aabbccddeeff\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"voiceSession\":\"123456789abcdef0\",\"frames\":%s}",client,repair_frames[i]);
+        receive(2,repair,a,false);
+    }
+    assert(repair_count==repairs_before+1 && post_count==posted_before_repair);
+    snprintf(repair,sizeof(repair),"{\"type\":\"voice.repair\",\"client\":\"%s\",\"device\":\"aabbccddeeff\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"voiceSession\":\"123456789abcdef0\",\"frames\":[2]}",client);
+    receive(2,repair,b,false);assert(repair_count==repairs_before+1); /* Token alone cannot replace the endpoint. */
+    receive(2,repair,ble,true);assert(repair_count==repairs_before+2);
+    release_after_send=true;receive(2,repair,a,false);assert(repair_count==repairs_before+2);release_after_send=false;
+    memset(strstr(repair,"aaaaaaaa"),'c',64);receive(2,repair,a,false);assert(repair_count==repairs_before+2);
     process_packet(media,sizeof(media),&ble,true);assert(media_count==before_media+2);
     char other[400];strcpy(other,auth);memset(strstr(other,client),'3',8);
     receive(3,other,b,false);assert(!hello_authorized && peer.sin_port==a.sin_port && owner_generation==generation);

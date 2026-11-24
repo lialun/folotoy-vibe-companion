@@ -34,6 +34,9 @@ static wifi_ps_type_t power_save=WIFI_PS_MIN_MODEM;
 uint32_t esp_random(void) {static uint32_t nonce=1;return nonce++;}
 uint32_t vibe_network_generation(void) {return 7;}
 void vibe_voice_report(void) {assert(v_status.voice_v2);}
+unsigned vibe_voice_begin(uint64_t session,uint32_t owner,bool repair){assert(session && owner==7);return repair?4:0;}
+unsigned vibe_voice_links(uint32_t owner){assert(owner==7);return 1;}
+void vibe_voice_end(uint64_t session,uint32_t owner){assert(session && owner==7);}
 
 uint64_t vibe_now(void) { return now; }
 void vibe_snapshot(vibe_model_t *m,vibe_prefs_t *p,vibe_status_t *s) {
