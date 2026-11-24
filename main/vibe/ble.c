@@ -220,7 +220,11 @@ esp_err_t vibe_ble_init(void) {
     ble_att_set_preferred_mtu(247);nimble_port_freertos_init(host_task);return ESP_OK;
 }
 int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t length) {
-    if (!tx_mutex || xSemaphoreTake(tx_mutex,0)!=pdTRUE) return -1;
+    const bool audio=type==1 || type==6;uint64_t began=vibe_now();
+    /* Only workers call this sender. Share the existing whole-packet budget
+     * with lock acquisition; an overlapping control packet must not cause an
+     * otherwise healthy BLE-only voice frame to be discarded immediately. */
+    if (!tx_mutex || xSemaphoreTake(tx_mutex,pdMS_TO_TICKS(vibe_ble_tx_lock_ms(audio)))!=pdTRUE) return -1;
     xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(conn);
     bool subscribed=link && link->subscribed;xSemaphoreGive(links_mutex);
     bool encrypted=secure(conn);
@@ -233,7 +237,6 @@ int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t l
     if (!capacity) { xSemaphoreGive(tx_mutex);return -1; }
     if (capacity>240) capacity=240;
     uint8_t id=++message_id,frame[247];size_t total=length+1;
-    const bool audio=type==1 || type==6;uint64_t began=vibe_now();
     for (size_t offset=0;offset<total;) {
         size_t n=total-offset;if (n>capacity) n=capacity;
         frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);

@@ -10,3 +10,4 @@ static inline bool vibe_ble_tx_admit(unsigned total_free,unsigned pool_free,bool
 static inline bool vibe_ble_tx_wait(uint64_t began,uint64_t now,bool audio) {
     return now>=began && now-began<(audio?30u:50u);
 }
+static inline unsigned vibe_ble_tx_lock_ms(bool audio) {return audio?30u:50u;}

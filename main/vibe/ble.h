@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 esp_err_t vibe_ble_init(void);
+/* Worker-only; bounded lock/pool wait shares one 30 ms voice / 50 ms control budget. */
 int vibe_ble_send_to(uint16_t handle,unsigned char type,const void *bytes,size_t length);
 void vibe_ble_publish_metadata(const char *text,size_t length);
 /* These entry points share the LAN control-owner policy. */

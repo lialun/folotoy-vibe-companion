@@ -12,6 +12,8 @@ int main(void) {
     assert(vibe_ble_tx_wait(100,129,true) && !vibe_ble_tx_wait(100,130,true));
     assert(vibe_ble_tx_wait(100,149,false) && !vibe_ble_tx_wait(100,150,false));
     assert(!vibe_ble_tx_wait(100,99,true));
+    assert(vibe_ble_tx_lock_ms(true)==30 && vibe_ble_tx_lock_ms(false)==50);
+    assert(!vibe_ble_tx_wait(100,100+vibe_ble_tx_lock_ms(true),true));
     /* Simulate a stalled controller: repeated voice submissions stop before
      * small-pool exhaustion and a write response can still be allocated. */
     unsigned available=12;

@@ -53,7 +53,9 @@ uses the existing bounded direct BLE path. UDP submission success is not proof
 of delivery; the redundant copy is still needed for one-way Wi-Fi loss.
 
 Type 6 receives the same voice admission policy as type 1: preserve six total
-mbuf blocks and four blocks in the consumed pool, with a 30 ms send budget.
+mbuf blocks and four blocks in the consumed pool, with a 30 ms whole-packet budget including sender-lock acquisition. Concurrent
+control traffic can briefly hold that lock; voice waits within its existing
+budget instead of immediately discarding a healthy BLE-only frame.
 One leg failing never erases authorization or requires a new pairing. Normal
 radio playback and configuration protocols retain their existing behavior.
 

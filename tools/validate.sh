@@ -146,6 +146,7 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
         tests/vibe/test_ble_frame.c -o "${test_dir}/test_vibe_ble_frame"
     "${test_dir}/test_vibe_ble_frame"
+    python3 tests/vibe/test_ble_sender.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
         tests/vibe/test_ble_media.c -o "${test_dir}/test_vibe_ble_media"
     "${test_dir}/test_vibe_ble_media"
