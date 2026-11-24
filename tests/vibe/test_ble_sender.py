@@ -11,6 +11,7 @@ preamble=r'''
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #define VIBE_BLE_PACKET_MAX 1537
 #define VIBE_BLE_HEADER 7
 #define BLE_HS_ENOMEM 6
@@ -21,9 +22,11 @@ preamble=r'''
 #define pdMS_TO_TICKS(n) (n)
 #define OS_ENTER_CRITICAL(n) ((n)=0)
 #define OS_EXIT_CRITICAL(n) ((void)(n))
-#define OS_MBUF_TRAILINGSPACE(b) ((void)(b),256u)
+#define OS_MBUF_TRAILINGSPACE(b) ((void)(b),trailing)
 #define ESP_LOGW(tag,...) do{(void)(tag);if(0)printf(__VA_ARGS__);}while(0)
 static unsigned clock_ms,contention,requested,notifications,allocations;
+static unsigned trailing=256,appended,assembled;
+static uint8_t saved[247],received[1537];
 static bool pressure,tx_locked;
 static void *tx_mutex=(void*)1,*links_mutex=(void*)2;
 static uint8_t message_id;
@@ -47,9 +50,13 @@ static bool secure(uint16_t h){assert(h==1);return true;}
 static unsigned ble_att_mtu(uint16_t h){assert(h==1);return 247;}
 static struct os_mbuf *ble_hs_mbuf_att_pkt(void){++allocations;pool.mp_num_free=pressure?2:20;return &mb;}
 static unsigned os_msys_num_free(void){return 20;}
-static int os_mbuf_append(struct os_mbuf*b,const void*d,size_t n){assert(b&&d&&n<=244);return 0;}
+static int os_mbuf_append(struct os_mbuf*b,const void*d,size_t n){assert(b&&d&&n<=244&&n<=trailing);memcpy(saved,d,n);appended=n;return 0;}
 static void os_mbuf_free_chain(struct os_mbuf*b){assert(b==&mb);}
-static int ble_gatts_notify_custom(uint16_t h,uint16_t a,struct os_mbuf*b){assert(h==1&&a==20&&b==&mb);++notifications;return 0;}
+static int ble_gatts_notify_custom(uint16_t h,uint16_t a,struct os_mbuf*b){
+ assert(h==1&&a==20&&b==&mb&&appended>7);unsigned offset=saved[5]|saved[6]<<8;
+ if(saved[2]&1)assembled=0;assert(offset==assembled);memcpy(received+offset,saved+7,appended-7);assembled+=appended-7;
+ if(saved[2]&2)assert(assembled==(unsigned)(saved[3]|saved[4]<<8));++notifications;return 0;
+}
 static void vTaskDelay(unsigned n){clock_ms+=n;}
 static unsigned heap_caps_get_free_size(unsigned n){(void)n;return 20000;}
 static unsigned heap_caps_get_largest_free_block(unsigned n){(void)n;return 10000;}
@@ -58,6 +65,9 @@ main=r'''
 int main(void){
  uint8_t body[816]={0};
  contention=20;assert(!vibe_ble_send_to(1,6,body,sizeof(body)));assert(requested==30&&clock_ms==20&&notifications==4&&!tx_locked);
+ trailing=211;notifications=0;assert(!vibe_ble_send_to(1,6,body,sizeof(body)));
+ assert(notifications==5&&assembled==817&&received[0]==6&&!memcmp(received+1,body,sizeof(body)));
+ trailing=256;
  clock_ms=0;contention=40;notifications=0;assert(vibe_ble_send_to(1,6,body,sizeof(body))==-1);assert(requested==30&&clock_ms==30&&!notifications&&!tx_locked);
  clock_ms=0;contention=20;pressure=true;assert(vibe_ble_send_to(1,6,body,sizeof(body))==-1);assert(clock_ms==30&&!tx_locked); /* ten remaining ms, not another thirty */
  clock_ms=0;contention=40;pressure=false;assert(!vibe_ble_send_to(1,2,body,20));assert(requested==50&&clock_ms==40&&!tx_locked);

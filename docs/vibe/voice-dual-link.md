@@ -49,11 +49,21 @@ mutex across radio work. One static in-flight slot and one pending slot use
 about 1.7 KB of device RAM, plus the slot mutex and counters. They carry owner
 and BLE connection generations; stale ownership, reused BLE handles, and copies
 older than 200 ms are discarded. A failed UDP submission or BLE-only operation
-uses the existing bounded direct BLE path. UDP submission success is not proof
+uses the existing bounded direct BLE path. A failed direct or worker send can
+retry in the same pending slot within its original 200 ms lifetime. An older
+retry never replaces a newer pending frame; revoked owner/link generations
+cannot retry. The worker polls at most 20 ms apart only while a copy is pending,
+including the final audio tail. Slot admission is not proof of delivery; the
+desktop's unique received/playout counters establish that separately.
+UDP submission success is not proof
 of delivery; the redundant copy is still needed for one-way Wi-Fi loss.
 
 Type 6 receives the same voice admission policy as type 1: preserve six total
-mbuf blocks and four blocks in the consumed pool, with a 30 ms whole-packet budget including sender-lock acquisition. Concurrent
+mbuf blocks and four blocks in the consumed pool, with a 30 ms whole-packet
+budget including sender-lock acquisition. Each BLE fragment fits the actual
+trailing space of its allocated mbuf, including the framing header. This avoids
+chaining two small-pool blocks per full-MTU fragment while another pool is free;
+the receiver already accepts variable fragment lengths. Concurrent
 control traffic can briefly hold that lock; voice waits within its existing
 budget instead of immediately discarding a healthy BLE-only frame.
 One leg failing never erases authorization or requires a new pairing. Normal

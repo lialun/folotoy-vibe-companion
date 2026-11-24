@@ -614,7 +614,7 @@ static void network_task(void *arg) {
         /* BLE host callbacks only enqueue; a bounded poll avoids calling into
          * lwIP from inside NimBLE or waiting 30 seconds for the first packet. */
         if (wait_ms>250) wait_ms=250;
-        wait_ms=vibe_clock_wait(&clock_sync,vibe_now(),wait_ms);
+        wait_ms=voice_copy_wait(vibe_clock_wait(&clock_sync,vibe_now(),wait_ms));
         timeout.tv_usec=(wait_ms%1000)*1000;timeout.tv_sec=wait_ms/1000;
         int ready=VIBE_PORTAL_DATA_READY;
         if (dns_socket>=0) {

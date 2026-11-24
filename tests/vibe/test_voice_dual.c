@@ -76,7 +76,21 @@ int main(void) {
     udp_fails=true;assert(!vibe_send_voice(body,sizeof(body),1) && ble_calls==2);udp_fails=false;
     /* BLE alone retains the original direct path. */
     now=8000;unsigned before=wifi_calls;assert(!vibe_send_voice(body,sizeof(body),1) && ble_calls==3 && wifi_calls==before);
-    ble_fails=true;assert(vibe_send_voice(body,sizeof(body),1)==-1);ble_fails=false;
+    ble_fails=true;assert(!vibe_send_voice(body,sizeof(body),1) && voice_pending.valid);
+    assert(voice_copy_wait(250)==20 && voice_copy_wait(10)==10);
+    uint64_t born=voice_pending.born;now+=40;voice_copy_flush();
+    assert(voice_pending.valid && voice_pending.born==born && voice_tx.retry_queued==2);
+    now+=40;ble_fails=false;voice_copy_flush();assert(!voice_pending.valid);
+    assert(voice_copy_wait(250)==250);
+    ble_fails=true;assert(!vibe_send_voice(body,sizeof(body),1));
+    now+=201;voice_copy_flush();assert(!voice_pending.valid);ble_fails=false;
+    /* An older failed in-flight frame cannot displace a newer pending frame. */
+    vibe_voice_copy_t old={0},newer={0};
+    vibe_voice_copy_offer(&old,body,sizeof(body),now,1,3,ble_generation);
+    vibe_voice_copy_offer(&newer,body,sizeof(body),now+1,1,3,ble_generation);
+    assert(!vibe_voice_copy_retry(&newer,&old,now+2,1) && newer.born==now+1);
+    newer.valid=false;assert(!vibe_voice_copy_retry(&newer,&old,now+201,1));
+    assert(!vibe_voice_copy_retry(&newer,&old,now,2));
     release_after_send=true;assert(vibe_send_voice(body,sizeof(body),1)==-1);release_after_send=false;
     /* An arbitrarily blocked backup cannot own the fast path's locks. */
     wifi_seen=now;assert(!vibe_send_voice(body,sizeof(body),1));

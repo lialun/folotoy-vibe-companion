@@ -239,23 +239,23 @@ int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t l
     uint8_t id=++message_id,frame[247];size_t total=length+1;
     for (size_t offset=0;offset<total;) {
         size_t n=total-offset;if (n>capacity) n=capacity;
-        frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);
-        frame[3]=total&255;frame[4]=total>>8;frame[5]=offset&255;frame[6]=offset>>8;
-        for (size_t i=0;i<n;i++) frame[VIBE_BLE_HEADER+i]=(offset+i)==0 ? type : ((const uint8_t *)bytes)[offset+i-1];
         int result=BLE_HS_ENOMEM;unsigned free_total=0,min_pool=0;
         do {
             struct os_mbuf *buffer=ble_hs_mbuf_att_pkt();
             free_total=(unsigned)os_msys_num_free();min_pool=UINT16_MAX;
             if (buffer) {
-                /* Append uses this same pool for the entire chain. Check its
-                 * projected cost before copying; allocating the full chain
-                 * first would temporarily consume the control reserve. */
+                /* ATT headroom makes a full-MTU value spill into another small
+                 * mbuf. Fit this fragment to the allocated block instead of
+                 * consuming two blocks while the other pool remains free. */
                 uint32_t critical;OS_ENTER_CRITICAL(critical);
                 min_pool=buffer->om_omp->omp_pool->mp_num_free;
                 OS_EXIT_CRITICAL(critical);
-                unsigned space=OS_MBUF_TRAILINGSPACE(buffer),block=buffer->om_omp->omp_databuf_len;
-                unsigned extra=n+VIBE_BLE_HEADER>space ? (n+VIBE_BLE_HEADER-space+block-1)/block:0;
-                if (extra<=free_total && extra<=min_pool && vibe_ble_tx_admit(free_total-extra,min_pool-extra,audio) &&
+                unsigned space=OS_MBUF_TRAILINGSPACE(buffer);
+                if (space>VIBE_BLE_HEADER && n>space-VIBE_BLE_HEADER) n=space-VIBE_BLE_HEADER;
+                frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);
+                frame[3]=total&255;frame[4]=total>>8;frame[5]=offset&255;frame[6]=offset>>8;
+                for (size_t i=0;i<n;i++) frame[VIBE_BLE_HEADER+i]=(offset+i)==0 ? type : ((const uint8_t *)bytes)[offset+i-1];
+                if (space>VIBE_BLE_HEADER && vibe_ble_tx_admit(free_total,min_pool,audio) &&
                     os_mbuf_append(buffer,frame,n+VIBE_BLE_HEADER)==0) {
                     result=ble_gatts_notify_custom(conn,tx_handle,buffer); /* Consumes buffer on every outcome. */
                     if (!result || (result!=BLE_HS_ENOMEM && result!=BLE_HS_EAGAIN)) break;

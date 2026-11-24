@@ -2,12 +2,15 @@
  * capture task's UDP send. The network worker alone drains copy_active. */
 static SemaphoreHandle_t voice_copy_mutex;
 static vibe_voice_copy_t voice_pending,voice_active;
-static struct {unsigned wifi,ble,failed,replaced,expired;} voice_tx;
-static int voice_ble_send(const vibe_voice_copy_t *copy) {
+static struct {unsigned wifi,ble,failed,replaced,expired,retry_queued;} voice_tx;
+static bool voice_copy_current(const vibe_voice_copy_t *copy) {
     xSemaphoreTake(peer_mutex,portMAX_DELAY);
     bool current=copy->owner==owner_generation && !release_after_send;
     xSemaphoreGive(peer_mutex);
-    if (!current || !vibe_ble_generation_matches(copy->handle,copy->link)) return -1;
+    return current && vibe_ble_generation_matches(copy->handle,copy->link);
+}
+static int voice_ble_send(const vibe_voice_copy_t *copy) {
+    if (!voice_copy_current(copy)) return -1;
     return vibe_ble_send_to(copy->handle,VIBE_VOICE_TYPE,copy->bytes,sizeof(copy->bytes));
 }
 static void voice_copy_flush(void) {
@@ -19,19 +22,26 @@ static void voice_copy_flush(void) {
     xSemaphoreGive(voice_copy_mutex);
     if (send) {
         int result=voice_ble_send(&voice_active);
+        owner=vibe_network_generation();now=vibe_now();
+        bool retry=result && voice_copy_current(&voice_active);
         xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);
         if (!result) ++voice_tx.ble;else ++voice_tx.failed;
+        if (retry && vibe_voice_copy_retry(&voice_pending,&voice_active,now,owner)) ++voice_tx.retry_queued;
         xSemaphoreGive(voice_copy_mutex);
     }
+}
+static unsigned voice_copy_wait(unsigned wait_ms) {
+    xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);bool pending=voice_pending.valid;xSemaphoreGive(voice_copy_mutex);
+    return pending && wait_ms>20 ? 20:wait_ms;
 }
 /* USB console writes can wait for host drainage. Keep diagnostic I/O out of
  * the live copy worker; take this snapshot only after capture has ended. */
 void vibe_voice_report(void) {
     if (!voice_copy_mutex) return;
     xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);
-    unsigned wifi=voice_tx.wifi,ble=voice_tx.ble,failed=voice_tx.failed,replaced=voice_tx.replaced,expired=voice_tx.expired;
+    unsigned wifi=voice_tx.wifi,ble=voice_tx.ble,failed=voice_tx.failed,replaced=voice_tx.replaced,expired=voice_tx.expired,retries=voice_tx.retry_queued;
     xSemaphoreGive(voice_copy_mutex);
-    ESP_LOGI(TAG,"Voice copies cumulative wifi=%u ble=%u failed=%u replaced=%u expired=%u",wifi,ble,failed,replaced,expired);
+    ESP_LOGI(TAG,"Voice copies cumulative wifi=%u ble=%u failed=%u replaced=%u expired=%u retry_queued=%u",wifi,ble,failed,replaced,expired,retries);
 }
 int vibe_send_voice(const void *bytes,size_t n,uint32_t expected_owner) {
     if (udp<0 || !voice_copy_mutex || !bytes || n!=VIBE_VOICE_BODY || !expected_owner) return -1;
@@ -63,9 +73,18 @@ int vibe_send_voice(const void *bytes,size_t n,uint32_t expected_owner) {
                  * path. Never queue seconds of speech behind a failing radio. */
                 vibe_voice_copy_t copy={0};vibe_voice_copy_offer(&copy,bytes,n,now,expected_owner,handle,link);
                 result=voice_ble_send(&copy);
+                bool queued=result && voice_copy_current(&copy);
                 xSemaphoreTake(voice_copy_mutex,portMAX_DELAY);
                 if (!result) ++voice_tx.ble;else ++voice_tx.failed;
+                if (queued) {
+                    /* Admission to the existing slot is not delivery. Retry on
+                     * the worker after transient lock/pool pressure, retaining
+                     * the original 200 ms lifetime and latest-frame bound. */
+                    if (vibe_voice_copy_offer(&voice_pending,bytes,n,now,expected_owner,handle,link)) ++voice_tx.replaced;
+                    ++voice_tx.retry_queued;result=0;
+                }
                 xSemaphoreGive(voice_copy_mutex);
+                if (queued) vibe_network_wake();
             }
         }
     }
