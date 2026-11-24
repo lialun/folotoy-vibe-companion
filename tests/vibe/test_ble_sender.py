@@ -42,7 +42,8 @@ static int xSemaphoreTake(void *s,unsigned timeout){
  if(s==links_mutex)return pdTRUE;
  assert(s==tx_mutex && !tx_locked);requested=timeout;
  unsigned waited=contention<timeout?contention:timeout;clock_ms+=waited;
- if(contention>timeout)return 0;tx_locked=true;return pdTRUE;
+ if(contention>timeout)return 0;
+ tx_locked=true;return pdTRUE;
 }
 static void xSemaphoreGive(void*s){if(s==tx_mutex){assert(tx_locked);tx_locked=false;}}
 static ble_link_t *find_link(uint16_t h){assert(h==1);return &link;}
@@ -54,8 +55,10 @@ static int os_mbuf_append(struct os_mbuf*b,const void*d,size_t n){assert(b&&d&&n
 static void os_mbuf_free_chain(struct os_mbuf*b){assert(b==&mb);}
 static int ble_gatts_notify_custom(uint16_t h,uint16_t a,struct os_mbuf*b){
  assert(h==1&&a==20&&b==&mb&&appended>7);unsigned offset=saved[5]|saved[6]<<8;
- if(saved[2]&1)assembled=0;assert(offset==assembled);memcpy(received+offset,saved+7,appended-7);assembled+=appended-7;
- if(saved[2]&2)assert(assembled==(unsigned)(saved[3]|saved[4]<<8));++notifications;return 0;
+ if(saved[2]&1)assembled=0;
+ assert(offset==assembled);memcpy(received+offset,saved+7,appended-7);assembled+=appended-7;
+ if(saved[2]&2)assert(assembled==(unsigned)(saved[3]|saved[4]<<8));
+ ++notifications;return 0;
 }
 static void vTaskDelay(unsigned n){clock_ms+=n;}
 static unsigned heap_caps_get_free_size(unsigned n){(void)n;return 20000;}
