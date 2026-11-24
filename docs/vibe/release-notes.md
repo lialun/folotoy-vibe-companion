@@ -4,6 +4,8 @@
 
 ## New in this release
 
+**Wi-Fi + Bluetooth working together for steadier, more continuous voice input.** The headline upgrade lets the two links back each other up, reducing the impact of brief packet loss or a single-link disconnection.
+
 Voice input now uses Wi-Fi and BLE together when both authorized links are
 available. The computer merges audio by recording and sequence, discards duplicate
 copies, and can continue over a surviving link without restarting input.
