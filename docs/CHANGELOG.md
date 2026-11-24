@@ -12,6 +12,14 @@
 
 ## Unreleased
 
+## v1.0.0 - 2026-11-24
+
+- Send voice over both authorized Wi-Fi and BLE attachments when available, merging and deduplicating audio before playback. A surviving link can carry the recording without restarting input.
+- Recover short single-link losses with negotiated, bounded audio history and missing-block repair; retry temporary Wi-Fi/BLE send pressure without accumulating seconds of old speech.
+- Stabilize link selection against brief jitter, preserve trailing speech and queue Enter until voice output finishes. Stop input safely on full disconnection or sleep; never resume recording automatically.
+- Scope voice timing activity to recording and release repair state and temporary history after use. Older peers retain their existing voice protocol; install the matching app and firmware for the new recovery behavior.
+- Known issue: Internet radio can still stutter when delivery changes to BLE and retransmissions accumulate. This release does not include a radio scheduling fix.
+
 ## v0.9.1 - 2026-11-23
 
 - Suspend Bluetooth scanning/connections, LAN retries, audio and quota polling when the computer sleeps, without waiting for network or audio cleanup on the sleep notification thread.
