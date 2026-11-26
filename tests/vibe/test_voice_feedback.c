@@ -69,7 +69,8 @@ int main(void) {
     assert(vibe_voice_tx_feedback(&tx,&f,7) && tx.confirmed==30);
     for (unsigned i=0;i<30;i++) assert(slots[i].pending==0);
     uint8_t packet[V_VOICE_FEEDBACK_BYTES]={7,1};char token[65];
-    for (unsigned i=0;i<64;i++) token[i]='0';token[64]=0;
+    for (unsigned i=0;i<64;i++) token[i]='0';
+    token[64]=0;
     packet[34]=1;packet[42]=1;
     assert(vibe_voice_feedback_parse(packet,sizeof(packet),&f));
     assert(vibe_voice_feedback_authenticated(packet,token));
