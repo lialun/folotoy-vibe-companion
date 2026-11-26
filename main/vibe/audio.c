@@ -2,10 +2,12 @@
 #include "radio/catalog_service.h"
 #include "radio/remote.h"
 #include "adpcm.h"
+#include "voice_capture.h"
+#include "ble.h"
 #include "voice_wire.h"
+#include "media_workspace.h"
 #include "ui_sfx.h"
 #include "bsp_audio.h"
-#include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/task.h"
@@ -18,7 +20,6 @@ static int16_t *capture_pcm;
 static const char *TAG="vibe_audio";
 static portMUX_TYPE request_mux=portMUX_INITIALIZER_UNLOCKED;
 static unsigned requests;
-static uint64_t voice_requested_at;
 static unsigned take_requests(void) {
     portENTER_CRITICAL(&request_mux); unsigned r=requests; requests=0; portEXIT_CRITICAL(&request_mux); return r;
 }
@@ -27,15 +28,16 @@ static bool pending(void) {
 }
 bool vibe_audio_request(unsigned action) {
     if (!worker) return false;
-    uint64_t now=vibe_now();
     portENTER_CRITICAL(&request_mux);
-    requests|=action;if (action&V_START_AUDIO) voice_requested_at=now;
+    requests|=action;
     portEXIT_CRITICAL(&request_mux);
     xTaskNotifyGive(worker); return true;
 }
 static bool radio_cancel(void) {
-    vibe_model_t m; vibe_status_t s; vibe_snapshot(&m,NULL,&s);
-    return pending() || !m.radio_active || !m.radio_requested || !s.peer || !s.radio_pcm || s.provisioning;
+    if (pending()) return true;
+    xSemaphoreTake(v_mutex,portMAX_DELAY);
+    bool cancel=!v_model.radio_active || !v_model.radio_requested || !v_status.peer || !v_status.radio_pcm || v_status.provisioning;
+    xSemaphoreGive(v_mutex);return cancel;
 }
 static void set_busy(bool yes) {
     xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.audio_busy=yes; xSemaphoreGive(v_mutex);
@@ -48,90 +50,33 @@ static bool prepare_audio(const char *operation) {
     return result==ESP_OK;
 }
 static void alarm_play(int16_t *pcm) {
-    vibe_prefs_t p; vibe_snapshot(NULL,&p,NULL);
+    xSemaphoreTake(v_mutex,portMAX_DELAY);unsigned volume=v_prefs.volume;xSemaphoreGive(v_mutex);
     if (!prepare_audio("alarm")) return;
     if (bsp_audio_set_format(UI_SFX_RATE,16,1)!=ESP_OK) return;
-    bsp_audio_set_volume(p.volume);
+    bsp_audio_set_volume(volume);
     unsigned total=ui_sfx_samples(UI_SFX_ALARM);
     for (unsigned pos=0;pos<total;) {
-        if (pending()) { vibe_model_t m;vibe_snapshot(&m,NULL,NULL);if (m.recording) break; }
+        if (pending()) {xSemaphoreTake(v_mutex,portMAX_DELAY);bool recording=v_model.recording;xSemaphoreGive(v_mutex);if (recording) break;}
         unsigned count=total-pos<256 ? total-pos : 256;
         for (unsigned i=0;i<count;i++) pcm[i]=ui_sfx_sample(UI_SFX_ALARM,pos+i);
         if (bsp_audio_write(pcm,count*2)!=ESP_OK) break;
         pos+=count;
     }
 }
-static void capture(int16_t *pcm) {
-    vibe_prefs_t p; vibe_model_t m; vibe_status_t s;
-    vibe_snapshot(&m,&p,&s);
-    if (!m.recording || !m.voice_ready) return;
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    bool started=false,failed=false;unsigned captured=0,send_drops=0;
-    const bool v2=s.voice_v2;
-    const uint32_t owner=vibe_network_generation();
-    uint64_t session=((uint64_t)esp_random()<<32)|esp_random();if (!session) session=1;
-    char event[192];
-    uint64_t began=vibe_now();
-    if (prepare_audio("capture") && bsp_audio_set_format(16000,16,1)==ESP_OK && bsp_audio_set_input_gain(p.mic_gain)==ESP_OK) {
-        bsp_audio_set_volume(0); /* I2S duplex clocks remain active; no speaker feedback. */
-        portENTER_CRITICAL(&request_mux);uint64_t requested=voice_requested_at;portEXIT_CRITICAL(&request_mux);
-        if (requested) ESP_LOGI(TAG,"Voice capture ready: latency_ms=%llu",(unsigned long long)(vibe_now()-requested));
-        if (v2) {
-            unsigned repair=vibe_voice_begin(session,owner,s.voice_repair);
-            snprintf(event,sizeof(event),"{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"voiceRepair\":%u,\"voiceLinks\":%u}",(unsigned long long)session,repair,vibe_voice_links(owner));
-            vibe_send_json(event);
-        } else vibe_send_json("{\"event\":\"voice.start\",\"audio\":\"ima_adpcm\"}");
-        started=true;
-        /* Give the Mac time to press the shortcut before the first 100ms block. */
-        vTaskDelay(pdMS_TO_TICKS(80));
-        adpcm_state_t state; adpcm_state_reset(&state);
-        uint8_t packet[VIBE_VOICE_BODY];const size_t header=v2?VIBE_VOICE_HEADER:2;
-        uint64_t start=vibe_now();
-        for (;;) {
-            vibe_snapshot(&m,NULL,&s);
-            if (!m.recording || !m.voice_ready || vibe_now()-start>=180000) break;
-            if (bsp_audio_read(pcm,ADPCM_BLOCK_SAMPLES*2)!=ESP_OK) { failed=true; break; }
-            /* Keep the last block on normal release so word endings aren't cut. */
-            size_t bytes=adpcm_encode_block(&state,pcm,ADPCM_BLOCK_SAMPLES,packet+header,ADPCM_BLOCK_BYTES);
-            if (v2) bytes=vibe_voice_encode(session,captured,packet+header,bytes,packet,sizeof(packet));
-            else {packet[0]=(uint8_t)captured;packet[1]=0x80;if(bytes)bytes+=2;}
-            ++captured;
-            if (!bytes || (v2?vibe_send_voice(packet,bytes,owner):vibe_send_audio(packet,bytes))!=0) {
-                ++send_drops;
-                xSemaphoreTake(v_mutex,portMAX_DELAY); ++v_status.drops; xSemaphoreGive(v_mutex);
-            }
-        }
-    } else failed=true;
-    if (started) {
-        ESP_LOGI(TAG,"Voice TX captured=%u send_drops=%u duration_ms=%llu",captured,send_drops,(unsigned long long)(vibe_now()-began));
-        /* V2 binds the terminal count to this recording; a late end from an
-         * earlier recording cannot stop the next one. The Mac drains its FIFO. */
-        if (v2) {
-            vibe_voice_end(session,owner);
-            snprintf(event,sizeof(event),"{\"event\":\"voice.end\",\"voiceVersion\":2,\"voiceSession\":\"%016llx\",\"frames\":%u}",(unsigned long long)session,captured);
-            vibe_send_json(event);
-        } else vibe_send_json("{\"event\":\"voice.end\"}");
-        if (v2) vibe_voice_report();
-    }
-    if (failed) {
-        ESP_LOGE(TAG,"Capture failed; next UP press may retry");
-        vibe_msg_t msg={.type=V_MSG_AUDIO_FAIL}; xQueueSend(v_queue,&msg,pdMS_TO_TICKS(100));
-    } else {
-        xSemaphoreTake(v_mutex,portMAX_DELAY); v_model.recording=false; xSemaphoreGive(v_mutex);
-    }
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-}
 static void process_audio(unsigned actions) {
     /* Join the optional weather worker before allocating/using audio resources. */
     vibe_weather_pause();
     if (actions&(V_START_AUDIO|V_ALARM|V_AGENT_ALERT)) {
-        if (actions&V_START_AUDIO) { set_busy(true); capture(capture_pcm); }
+        if (actions&V_START_AUDIO) { set_busy(true); vibe_voice_capture(capture_pcm); }
         if (actions&(V_ALARM|V_AGENT_ALERT)) { set_busy(true); alarm_play(capture_pcm); }
     }
     unsigned failures=0;
     while (!radio_cancel()) {
-        vibe_prefs_t p;vibe_snapshot(NULL,&p,NULL);
+        /* The network owner may still be completing the previous voice tail.
+         * Do not allocate/reuse that history for radio, or wait on a new press. */
+        if (vibe_media_owner()==V_MEDIA_VOICE) {ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(20));continue;}
         set_busy(true);
+        vibe_network_radio_activity(true);
         if (!prepare_audio("radio")) {
             xSemaphoreTake(v_mutex,portMAX_DELAY);v_model.radio_requested=false;xSemaphoreGive(v_mutex);
             vibe_radio_status(V_RADIO_ERROR,"音频暂不可用");break;
@@ -139,7 +84,7 @@ static void process_audio(unsigned actions) {
         char url[257];vibe_radio_url(url,sizeof(url));
         vibe_radio_status(V_RADIO_CONNECTING,"");
         uint64_t started=vibe_now();
-        const vibe_radio_result_t result=vibe_radio_session(url,radio_cancel);
+        const vibe_radio_result_t result=vibe_radio_session(url,radio_cancel,capture_pcm);
         if (radio_cancel()) break;
         if (result==V_RADIO_SESSION_NO_MEMORY || result==V_RADIO_SESSION_REMOTE_ERROR) {
             xSemaphoreTake(v_mutex,portMAX_DELAY);v_model.radio_requested=false;xSemaphoreGive(v_mutex);
@@ -152,6 +97,7 @@ static void process_audio(unsigned actions) {
         }
         /* No decoder, TLS or powered codec during reconnect backoff. */
         bsp_audio_sleep();set_busy(false);vibe_radio_status(V_RADIO_CONNECTING,"");
+        vibe_network_radio_activity(false);
         /* An established stream already spent time draining its FIFO and
          * timing out. Do not add two more silent seconds before its first
          * reconnect. Repeated short failures still back off and stop at three. */
@@ -164,6 +110,7 @@ static void process_audio(unsigned actions) {
         xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.audio_fault=true;xSemaphoreGive(v_mutex);
     }
     set_busy(false);
+    vibe_network_radio_activity(false);
     xSemaphoreTake(v_mutex,portMAX_DELAY);
     v_status.radio_playing=false;
     if (v_status.radio_state!=V_RADIO_ERROR) v_status.radio_state=V_RADIO_STOPPED;
@@ -188,7 +135,7 @@ esp_err_t vibe_audio_init(void) {
      * including while radio owns its much larger, disposable workspace. */
     capture_pcm=malloc(ADPCM_BLOCK_SAMPLES*2);
     if (!capture_pcm) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(audio_task,"vibe_audio",10240,NULL,6,&worker)==pdPASS) return ESP_OK;
+    if (xTaskCreate(audio_task,"vibe_audio",8192,NULL,6,&worker)==pdPASS) return ESP_OK;
     free(capture_pcm);capture_pcm=NULL;worker=NULL;
     return ESP_ERR_NO_MEM;
 }

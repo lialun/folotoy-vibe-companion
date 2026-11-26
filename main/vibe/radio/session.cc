@@ -131,7 +131,8 @@ void read_stream(void *opaque) {
 }
 }
 /* Session owns FIFO/HTTP/decoder/I2S. Reader is joined before freeing any data. */
-extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void)) {
+extern "C" vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void),int16_t *pcm) {
+    (void)pcm; // Standalone decoder regression backend owns its codec workspace.
     report_heap("session");
     radio_stream::Workspace workspace;
     struct Context { bool (*cancel)(void); } context{cancel};

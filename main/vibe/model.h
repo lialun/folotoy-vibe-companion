@@ -18,6 +18,7 @@ enum { V_START_AUDIO=1, V_STOP_AUDIO=2, V_ENTER=4, V_ALARM=8,
        V_PREFS_CHANGED=16, V_START_PROVISION=32, V_RADIO_CHANGED=64, V_UNPAIR=256, V_RADIO_STATION=512, V_AGENT_ALERT=1024,
        V_DISMISS_INTRO=2048, V_FINISH_PROVISION=4096 };
 typedef struct {
+    uint32_t voice_request;
     vibe_page_t page;
     vibe_timer_t timer;
     bool recording, voice_ready, enter_ready, screen_on, alarm_pending, radio_requested, radio_active, switch_radio;

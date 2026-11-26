@@ -20,6 +20,9 @@ run_static_checks() {
     fi
 
     python3 tools/check_repo.py
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ./macos/test-voice.sh
+    fi
 
     actionlint_bin="${ACTIONLINT_BIN:-}"
     if [[ -z "${actionlint_bin}" ]]; then
@@ -87,6 +90,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_package.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_voice_bench.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
         tests/vibe/test_model.c main/vibe/model.c -o "${test_dir}/test_vibe_model"
@@ -108,12 +112,27 @@ run_static_checks() {
         tests/vibe/test_wire.c main/vibe/adpcm.c main/vibe/protocol.c -lm \
         -o "${test_dir}/test_vibe_wire"
     "${test_dir}/test_vibe_wire"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread -Imain/vibe \
-        tests/vibe/test_voice_dual.c -o "${test_dir}/test_vibe_voice_dual"
-    "${test_dir}/test_vibe_voice_dual"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
-        tests/vibe/test_voice_history.c -o "${test_dir}/test_vibe_voice_history"
-    "${test_dir}/test_vibe_voice_history"
+        tests/vibe/test_voice_tx.c main/vibe/voice_tx.c -o "${test_dir}/test_vibe_voice_tx"
+    "${test_dir}/test_vibe_voice_tx"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
+        tests/vibe/test_voice_feedback.c main/vibe/voice_tx.c -o "${test_dir}/test_vibe_voice_feedback"
+    "${test_dir}/test_vibe_voice_feedback"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/voice_stubs -Itests/vibe/stubs -Itests/audio_stubs -Imain/vibe \
+        tests/vibe/test_media_workspace.c -o "${test_dir}/test_vibe_media_workspace"
+    "${test_dir}/test_vibe_media_workspace"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
+        -Itests/vibe/voice_stubs -Itests/vibe/stubs -Itests/audio_stubs -Imain/vibe \
+        tests/vibe/test_voice_uplink.c main/vibe/voice_tx.c -o "${test_dir}/test_vibe_voice_uplink"
+    "${test_dir}/test_vibe_voice_uplink"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/vibe/power_stubs -Itests/audio_stubs -Imain/vibe \
+        tests/vibe/test_voice_power.c main/vibe/voice_power.c -o "${test_dir}/test_vibe_voice_power"
+    "${test_dir}/test_vibe_voice_power"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
+        tests/vibe/test_wifi_power.c -o "${test_dir}/test_vibe_wifi_power"
+    "${test_dir}/test_vibe_wifi_power"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
         tests/vibe/test_peer.c -o "${test_dir}/test_vibe_peer"
     "${test_dir}/test_vibe_peer"
@@ -150,6 +169,8 @@ run_static_checks() {
         tests/vibe/test_ble_frame.c -o "${test_dir}/test_vibe_ble_frame"
     "${test_dir}/test_vibe_ble_frame"
     python3 tests/vibe/test_ble_sender.py
+    python3 tests/vibe/test_network_outbound.py
+    python3 tests/vibe/test_ble_hci_probe.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
         tests/vibe/test_ble_media.c -o "${test_dir}/test_vibe_ble_media"
     "${test_dir}/test_vibe_ble_media"
@@ -162,7 +183,7 @@ run_static_checks() {
         tests/vibe/test_quota.c main/vibe/quota.c main/vibe/model.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_quota"
     "${test_dir}/test_vibe_quota"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe -Itests/vibe/vendor/cjson \
-        tests/vibe/test_connection.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_connection"
+        tests/vibe/test_connection.c main/vibe/voice_tx.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_connection"
     "${test_dir}/test_vibe_connection"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
         -Itests/vibe/remote_stubs -Itests/vibe/stubs -Itests/audio_stubs -Icomponents/bsp/include -Imain/vibe -Itests/vibe/vendor/cjson \

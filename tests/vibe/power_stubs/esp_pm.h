@@ -10,3 +10,9 @@ typedef struct {
 } esp_pm_sleep_cbs_register_config_t;
 esp_err_t esp_pm_light_sleep_register_cbs(esp_pm_sleep_cbs_register_config_t *);
 esp_err_t esp_pm_dump_locks(FILE *);
+
+typedef struct voice_test_pm_lock *esp_pm_lock_handle_t;
+typedef enum { ESP_PM_CPU_FREQ_MAX } esp_pm_lock_type_t;
+esp_err_t esp_pm_lock_create(esp_pm_lock_type_t,int,const char *,esp_pm_lock_handle_t *);
+esp_err_t esp_pm_lock_acquire(esp_pm_lock_handle_t);
+esp_err_t esp_pm_lock_release(esp_pm_lock_handle_t);

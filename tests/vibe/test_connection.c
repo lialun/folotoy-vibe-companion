@@ -1,7 +1,7 @@
 #include "peer.h"
 #include "radio/stream.h"
 #include "connection_request.h"
-#include "voice_history.h"
+#include "voice_tx.h"
 #include "cJSON.h"
 #include <assert.h>
 #include <arpa/inet.h>
@@ -23,12 +23,18 @@ static char owner_client[37],posted[1537],reply[256];
 static unsigned post_count,hello_count;
 static uint32_t posted_generation;
 static unsigned repair_count;
-static bool voice_repair_request(uint64_t session,const uint32_t *frames,unsigned count,uint32_t owner) {
+static unsigned feedback_count;
+
+static uint32_t last_repair_id;
+static void vibe_voice_uplink_ready(uint64_t session,uint32_t owner) {(void)session;assert(owner==owner_generation);}
+static void vibe_voice_uplink_cancel(uint64_t session,uint32_t owner) {(void)session;assert(owner==owner_generation);}
+static bool vibe_voice_repair_request(uint64_t session,const uint32_t *frames,unsigned count,uint32_t owner,uint32_t request_id) {
+    last_repair_id=request_id;
     if(!session)return false;
     assert(frames && count && count<=4 && owner==owner_generation);++repair_count;return true;
 }
 static bool hello_authorized,hello_checked;
-static struct { bool ble_peer,provisioning;uint64_t peer_seen_ms;char token[65];vibe_connection_request_t connection_request; } v_status;
+static struct { bool ble_peer,provisioning,voice_feedback;unsigned heartbeat_ms;uint64_t peer_seen_ms;char token[65];vibe_connection_request_t connection_request; } v_status;
 static struct { bool recording; } v_model;
 typedef struct { unsigned heartbeat;char device[18]; } link_snapshot_t;
 static bool locks[3];
@@ -64,6 +70,10 @@ static unsigned media_count;
 void vibe_radio_remote_receive(const uint8_t *packet,size_t n,uint32_t generation,bool ble) {
     (void)packet;(void)ble;assert(n==V_RADIO_PACKET && generation==owner_generation && !locks[1] && !locks[2]);++media_count;
 }
+static bool vibe_voice_uplink_feedback(const vibe_voice_feedback_t *feedback,uint32_t owner) {
+    assert(feedback->session==1 && feedback->id==1 && owner==owner_generation && !locks[1] && !locks[2]);
+    ++feedback_count;return true;
+}
 #define sendto capture_send
 #include "link_receive.inc"
 #include "link_release.inc"
@@ -95,6 +105,21 @@ int main(void) {
     process_packet(media,sizeof(media),&ble,true);assert(media_count==before_media+1);
     uint32_t generation=owner_generation;
     receive(3,auth,ble,true);assert(hello_authorized && ble_owner && peer.sin_port==a.sin_port && owner_generation==generation);
+    uint8_t feedback[V_VOICE_FEEDBACK_BYTES]={V_VOICE_FEEDBACK_TYPE,1};
+    memset(feedback+2,0xaa,32);feedback[34]=1;feedback[42]=1;
+    unsigned feedback_before=feedback_count,posted_before_feedback=post_count;
+    v_status.heartbeat_ms=5000;
+    process_packet(feedback,sizeof(feedback),&a,false);assert(feedback_count==feedback_before);
+    v_status.voice_feedback=true;
+    process_packet(feedback,sizeof(feedback),&b,false);assert(feedback_count==feedback_before);
+    process_packet(feedback,sizeof(feedback),&a,false);assert(feedback_count==feedback_before+1);
+    process_packet(feedback,sizeof(feedback),&ble,true);assert(feedback_count==feedback_before+2);
+    feedback[2]^=1;process_packet(feedback,sizeof(feedback),&a,false);feedback[2]^=1;
+    assert(feedback_count==feedback_before+2 && post_count==posted_before_feedback);
+    release_after_send=true;process_packet(feedback,sizeof(feedback),&a,false);release_after_send=false;
+    assert(feedback_count==feedback_before+2);
+    uint64_t saved_now=now_ms;now_ms+=120000;process_packet(feedback,sizeof(feedback),&a,false);now_ms=saved_now;
+    assert(feedback_count==feedback_before+2);
     char repair[512];unsigned posted_before_repair=post_count,repairs_before=repair_count;
     const char *repair_frames[]={"[1,2]","[]","[0.5]","[-1]","[2000]","[null]","[1,2,3,4,5]","1","[1e999]"};
     for(unsigned i=0;i<sizeof(repair_frames)/sizeof(repair_frames[0]);i++) {
@@ -107,6 +132,13 @@ int main(void) {
     receive(2,repair,ble,true);assert(repair_count==repairs_before+2);
     release_after_send=true;receive(2,repair,a,false);assert(repair_count==repairs_before+2);release_after_send=false;
     memset(strstr(repair,"aaaaaaaa"),'c',64);receive(2,repair,a,false);assert(repair_count==repairs_before+2);
+    unsigned saved_repairs=repair_count;
+    const char *repair_ids[]={"0","-1","true","1.5","4294967296","1e999","42"};
+    for(unsigned i=0;i<sizeof(repair_ids)/sizeof(repair_ids[0]);i++) {
+        snprintf(repair,sizeof(repair),"{\"type\":\"voice.repair\",\"client\":\"%s\",\"device\":\"aabbccddeeff\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"voiceSession\":\"123456789abcdef0\",\"frames\":[2],\"repairID\":%s}",client,repair_ids[i]);
+        receive(2,repair,a,false);
+    }
+    assert(repair_count==saved_repairs+1 && last_repair_id==42);
     process_packet(media,sizeof(media),&ble,true);assert(media_count==before_media+2);
     char other[400];strcpy(other,auth);memset(strstr(other,client),'3',8);
     receive(3,other,b,false);assert(!hello_authorized && peer.sin_port==a.sin_port && owner_generation==generation);

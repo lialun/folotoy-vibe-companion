@@ -1,5 +1,6 @@
 #pragma once
 #include "model.h"
+#include "voice_diagnostics.h"
 #include "weather.h"
 #include "appearance.h"
 #include "signal.h"
@@ -21,7 +22,8 @@ extern "C" {
 typedef struct {
     vibe_connection_request_t connection_request;
     bool ble_peer, wifi, peer, audio_ready, hotkey_ready, audio_busy, audio_fault, provisioning;
-    bool radio_playing, radio_loading, radio_pcm, voice_v2, voice_repair;
+    bool radio_playing, radio_loading, radio_pcm, voice_v2, voice_repair, voice_handshake, voice_interleave;
+    bool voice_feedback;
     unsigned radio_state;
     char radio_name[64], radio_description[96],radio_error[64];
     vibe_weather_t forecast;
@@ -50,16 +52,12 @@ void vibe_snapshot(vibe_model_t *m, vibe_prefs_t *p, vibe_status_t *s);
 bool vibe_save_prefs(void);
 void vibe_send_json(const char *json);
 void vibe_send_json_both(const char *json);
+void vibe_send_json_owned(const char *json,uint32_t owner,vibe_delivery_t delivery);
 uint32_t vibe_network_generation(void);
-int vibe_send_audio(const void *data, size_t len);
-/* V2 uplink: immediate UDP plus a bounded, independently drained BLE copy. */
-int vibe_send_voice(const void *data,size_t len,uint32_t owner);
-unsigned vibe_voice_begin(uint64_t session,uint32_t owner,bool repair);
-unsigned vibe_voice_links(uint32_t owner);
-void vibe_voice_end(uint64_t session,uint32_t owner);
-void vibe_voice_report(void);
 esp_err_t vibe_network_init(void);
 void vibe_network_wake(void);
+/* Audio worker publishes actual radio activity, including reconnect backoff. */
+void vibe_network_radio_activity(bool active);
 void vibe_network_release(void);
 /* Called by the controller under v_mutex, only after credential persistence. */
 void vibe_network_commit(const char *client);

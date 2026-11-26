@@ -6,13 +6,14 @@
 #include "bsp_audio.h"
 #include "esp_random.h"
 #include "esp_log.h"
-#include "esp_wifi.h"
 #include "esp_coexist.h"
 #include "freertos/task.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
 #include "cJSON.h"
+#include "media_workspace.h"
+#include "ble.h"
 static SemaphoreHandle_t mutex;
 static vibe_radio_stream_t *stream;
 static bool remote_failed;
@@ -41,23 +42,23 @@ static void progress(const progress_t *s) {
     char line[224];snprintf(line,sizeof(line),"{\"event\":\"radio.progress\",\"session\":\"%016" PRIx64 "\",\"next\":%" PRIu32 ",\"mask\":%u,\"wifi\":%" PRIu32 ",\"ble\":%" PRIu32 ",\"rssi\":%d}",s->session,s->next,s->mask,s->last_wifi,s->last_ble,rssi);
     vibe_send_json_both(line);
 }
-static void release_buffers(vibe_radio_stream_t *s,int16_t *pcm,uint8_t *buffers[V_RADIO_WINDOW]) {
-    for (unsigned i=0;i<V_RADIO_WINDOW;i++) free(buffers[i]);
-    free(s);free(pcm);
-}
-vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void)) {
-    vibe_radio_stream_t *s=calloc(1,sizeof(*s));int16_t *pcm=malloc(V_RADIO_SAMPLES*sizeof(*pcm));
-    uint8_t *buffers[V_RADIO_WINDOW]={0};bool allocated=s && pcm;
-    for (unsigned i=0;allocated && i<V_RADIO_WINDOW;i++) allocated=(buffers[i]=malloc(V_RADIO_BYTES))!=NULL;
-    if (!allocated) { release_buffers(s,pcm,buffers);vibe_radio_status(V_RADIO_ERROR,"音频内存不足");return V_RADIO_SESSION_NO_MEMORY; }
+vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void),int16_t *pcm) {
+    vibe_media_lease_t lease;
+    size_t required=sizeof(vibe_radio_stream_t)+V_RADIO_WINDOW*V_RADIO_BYTES;
+    if (!pcm || !vibe_media_acquire(V_MEDIA_RADIO,required,&lease)) {
+        vibe_radio_status(V_RADIO_ERROR,"音频内存不足");return V_RADIO_SESSION_NO_MEMORY;
+    }
+    vibe_radio_stream_t *s=lease.memory;
+    uint8_t *buffers[V_RADIO_WINDOW];
+    for (unsigned i=0;i<V_RADIO_WINDOW;i++) buffers[i]=(uint8_t *)(s+1)+i*V_RADIO_BYTES;
     uint64_t nonce;esp_fill_random(&nonce,sizeof(nonce));if (!nonce) nonce=1;
     const uint32_t owner=vibe_network_generation();vibe_radio_stream_init(s,nonce,owner,buffers);
     cJSON *open=cJSON_CreateObject();char id[17];snprintf(id,sizeof(id),"%016" PRIx64,nonce);
     bool valid=open && cJSON_AddStringToObject(open,"event","radio.open") && cJSON_AddStringToObject(open,"session",id) && cJSON_AddStringToObject(open,"url",url) && cJSON_AddNumberToObject(open,"window",V_RADIO_WINDOW) && cJSON_AddNumberToObject(open,"format",V_RADIO_FORMAT);
     char *request=valid?cJSON_PrintUnformatted(open):NULL;cJSON_Delete(open);
-    if (!request) { release_buffers(s,pcm,buffers);vibe_radio_status(V_RADIO_ERROR,"音频内存不足");return V_RADIO_SESSION_NO_MEMORY; }
+    if (!request) { vibe_media_release(lease);vibe_radio_status(V_RADIO_ERROR,"音频内存不足");return V_RADIO_SESSION_NO_MEMORY; }
     xSemaphoreTake(mutex,portMAX_DELAY);stream=s;remote_failed=false;xSemaphoreGive(mutex);
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    vibe_ble_radio_ingress(true);
     /* Keep BLE connection events and its audio credits timely while the shared
      * radio scans/associates on Wi-Fi. UDP audio uses little Wi-Fi airtime.
      * This session alone owns the hint; voice and idle return to balance. */
@@ -86,7 +87,7 @@ vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void)) {
         if (have) {
             empty_since=0;
             if (adpcm_decode_block(frame,sizeof(frame),V_RADIO_SAMPLES,pcm,V_RADIO_SAMPLES)!=V_RADIO_SAMPLES) { failed=true;break; }
-            vibe_prefs_t p;vibe_snapshot(NULL,&p,NULL);bsp_audio_set_volume(p.volume);
+            xSemaphoreTake(v_mutex,portMAX_DELAY);unsigned volume=v_prefs.volume;xSemaphoreGive(v_mutex);bsp_audio_set_volume(volume);
             if (bsp_audio_write(pcm,V_RADIO_SAMPLES*2)!=ESP_OK) { failed=true;break; }
             if (!rendering) { vibe_radio_status(V_RADIO_PLAYING,"");rendering=true; }
             if (!played) { vibe_radio_played(url);played=true; }
@@ -107,7 +108,8 @@ vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void)) {
     }
     xSemaphoreTake(mutex,portMAX_DELAY);stream=NULL;xSemaphoreGive(mutex);
     char close[96];snprintf(close,sizeof(close),"{\"event\":\"radio.close\",\"session\":\"%s\"}",id);vibe_send_json_both(close);
-    free(request);release_buffers(s,pcm,buffers);esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    vibe_ble_radio_ingress(false);
+    vibe_media_release(lease);free(request);
     radio_coex(ESP_COEX_PREFER_BALANCE);
     ESP_LOGI(TAG,"Computer playback stop: frames=%u underruns=%u failed=%d",frames,underruns,failed);
     if (failed) { vibe_radio_status(V_RADIO_ERROR,"电台连接失败");return V_RADIO_SESSION_REMOTE_ERROR; }

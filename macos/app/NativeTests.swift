@@ -12,6 +12,10 @@ enum NativeTests {
         ConnectionTests.run(check)
         ShortcutSleepTests.run(check)
         VoiceMergeTests.run(check)
+        VoiceRepairTests.run(check)
+        VoiceFeedbackTests.run(check)
+        InputCommandTests.run(check)
+        BLEFrameTests.run(check)
         Engine.testVoiceMerge(check)
         check(VoiceCodec.decode(Data(repeating:0,count:803))==nil,"short ADPCM block")
         var block=Data(repeating:0,count:804);block[2]=89

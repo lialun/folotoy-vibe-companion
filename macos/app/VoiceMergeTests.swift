@@ -2,189 +2,198 @@ import Foundation
 
 enum VoiceMergeTests {
     static func run(_ check:(Bool,String)->Void) {
-        let block=Data(repeating:0,count:804)
-        func frame(_ sequence:UInt32,_ session:UInt64=0x123456789abcdef0)->VoiceFrame {
-            VoiceFrame(session:session,sequence:sequence,block:block)
+        let session:UInt64=0x123456789abcdef0
+        func frame(_ seq:UInt32)->VoiceFrame {
+            VoiceFrame(session:session,sequence:seq,block:Data(repeating:0,count:804))
         }
-        func wire(_ sequence:UInt32,_ session:UInt64=0x123456789abcdef0)->Data {
-            var data=Data([6]);for i in 0..<8 {data.append(UInt8(truncatingIfNeeded:session>>(8*i)))}
-            for i in 0..<4 {data.append(UInt8(truncatingIfNeeded:sequence>>(8*i)))}
-            data.append(block);return data
+        func sequences(_ output:[VoiceMerge.Output])->[UInt32] {
+            output.compactMap{if case .audio(let frame,_)=$0 {return frame.sequence};return nil}
         }
-        let session=frame(0).session
-        check(VoiceFrame.parse(wire(256))?.sequence==256,"V2 sequence survives legacy 8-bit wrap")
-        check(VoiceFrame.parse(wire(256))?.session==session,"64-bit session uses firmware little endian")
-        check(VoiceFrame.parse(wire(0,0))==nil && VoiceFrame.parse(wire(UInt32.max))==nil,"reject zero session and impossible sequence")
-        var bad=wire(0);bad[15]=89;check(VoiceFrame.parse(bad)==nil,"validate ADPCM before buffering")
-        check(VoiceFrame.parse(Data(wire(0).dropLast()))==nil,"reject truncated V2 packet")
-        if case .voice(let decoded)?=Packet.parse(wire(42)) {check(decoded.sequence==42,"Packet dispatches V2 without premature decode")}
-        else {check(false,"V2 wire dispatch")}
-        var merge=VoiceMerge(session:session)
-        check(!merge.accept(frame(0,1),via:.wifi,now:0),"ignore previous recording audio")
-        check(merge.accept(frame(0),via:.wifi,now:0),"first copy accepted")
-        check(!merge.accept(frame(0),via:.bluetooth,now:0.01),"duplicate is discarded before decode")
-        check(merge.drain(now:0.119).isEmpty,"prefill provides bounded recovery time")
-        check(merge.drain(now:0.12).count==1 && merge.next==1,"one block at first playout deadline")
-        check(!merge.accept(frame(0),via:.bluetooth,now:0.13),"late duplicate cannot replay")
-        check(merge.accept(frame(2),via:.wifi,now:0.2) && merge.accept(frame(1),via:.bluetooth,now:0.21),"alternate link repairs out-of-order hole")
-        if case .audio(let f,.bluetooth)?=merge.drain(now:0.22).first {check(f.sequence==1,"repair plays once in order")}else{check(false,"repair output")}
-        merge.finish(frames:3)
-        check(merge.tailDelay(now:0.22)>=0.18 && merge.tailDelay(now:0.22)<=1,"terminal grace is bounded")
-        check(merge.drain(now:0.32).count==1 && merge.drain(now:2).isEmpty,"end count prevents trailing silence")
-        check(!merge.accept(frame(3),via:.wifi,now:2),"terminal count rejects post-release audio")
-        check(merge.duplicates==1 && merge.late==2 && merge.recovered==1,"merge diagnostics distinguish duplicate, late and recovered")
-        check(merge.received==3 && merge.lateFirst==0,"late duplicate is not reported as a first-copy deadline miss")
-        var startup=VoiceMerge(session:session)
-        _=startup.accept(frame(1),via:.wifi,now:0);_=startup.accept(frame(0),via:.bluetooth,now:0.1)
-        if case .audio(let f,_)?=startup.drain(now:0.12).first {check(f.sequence==0,"initial out-of-order block can recover during prefill")}
-        else {check(false,"startup repair")}
-        var leading=VoiceMerge(session:session);_=leading.accept(frame(3),via:.wifi,now:0)
-        if case .audio(let f,_)?=leading.drain(now:0.12).first {check(f.sequence==3 && leading.missing==3,"skip missing leading blocks without adding startup latency")}
-        else {check(false,"leading loss")}
+        var merge=VoiceMerge(session:session,prefill:0.25)
+        check(merge.accept(frame(0),via:.wifi,now:0),"admit first block")
+        check(!merge.accept(frame(0),via:.bluetooth,now:0.01) && merge.duplicates==1,"mirror is one logical block")
+        check(merge.drain(now:0.24).isEmpty,"bounded initial jitter prefill")
+        check(sequences(merge.drain(now:0.25))==[0],"first block plays once")
+        for now in [0.5,1.0,10.0,100.0] {
+            check(merge.drain(now:now).isEmpty && merge.next==1 && merge.missing==0,"clock cannot advance into unproduced speech")
+        }
+        check(merge.accept(frame(1),via:.bluetooth,now:100),"a delayed subsequent block remains usable")
+        check(sequences(merge.drain(now:100))==[1] && merge.lateFirst==0,"recovery does not reapply startup prefill or replay earlier audio")
+        merge.finish(frames:2)
+        check(merge.complete && !merge.accept(frame(2),via:.wifi,now:101),"terminal count bounds the stream")
+
+        var hole=VoiceMerge(session:session,repairHistory:6)
+        _=hole.accept(frame(0),via:.wifi,now:0)
+        _=hole.accept(frame(2),via:.bluetooth,now:0.2)
+        hole.finish(frames:3)
+        var heard:[UInt32]=[]
+        for tick in 0...100 {heard+=sequences(hole.drain(now:Double(tick)*0.02))}
+        check(heard==[0,2] && hole.missing==1 && hole.complete,"an observed permanent hole emits one bounded gap")
+        let next=hole.next
+        _=hole.drain(now:1000)
+        check(hole.next==next && hole.missing==1,"completed stream cannot create more synthetic losses")
+
         var bounded=VoiceMerge(session:session)
-        for seq in UInt32(0)..<1500 { _=bounded.accept(frame(seq),via:.wifi,now:Double(seq)*0.1);check(bounded.buffered<=8,"stalled consumer has bounded compressed storage") }
-        check(bounded.resyncs>0,"long stalls resynchronize instead of replaying a backlog")
-        _=bounded.drain(now:1000000);check(bounded.next<=VoiceFrame.maxFrames,"large scheduler delay cannot overflow sequence")
-        var empty=VoiceMerge(session:session);empty.finish(frames:0)
-        check(empty.drain(now:100).isEmpty && !empty.accept(frame(0),via:.wifi,now:100),"zero-frame recording stays empty")
-        var earlyEnd=VoiceMerge(session:session);earlyEnd.finish(frames:1)
-        check(earlyEnd.tailDelay(now:0)>=0.36,"end beating first audio retains prefill, block duration and sink drain")
-        _=earlyEnd.accept(frame(0),via:.bluetooth,now:0.03)
-        check(earlyEnd.drain(now:0.15).count==1,"last short-recording block survives reordered end")
-        var rescue=VoiceMerge(session:session)
-        _=rescue.accept(frame(0),via:.wifi,now:0);_=rescue.drain(now:0.12)
-        check(rescue.drain(now:0.22).isEmpty && rescue.next==1,"brief shared stall waits instead of dropping speech")
-        _=rescue.accept(frame(1),via:.bluetooth,now:0.35)
-        check(rescue.drain(now:0.36).count==1 && rescue.missing==0 && rescue.rescued==1,"late first copy can rescue a shared delay")
-        check(rescue.extraDelay>0.13 && rescue.extraDelay<0.15,"only measured waiting extends latency")
-        _=rescue.drain(now:0.46);_=rescue.drain(now:0.53)
-        check(rescue.extraDelay<=VoiceMerge.rescueBudget && rescue.next>2,"permanent loss cannot wait indefinitely")
-        _=rescue.accept(frame(2),via:.wifi,now:0.6)
-        check(rescue.lateFirst==1 && rescue.received==3,"first copy arriving after playout is distinct from radio loss")
-        var events=VoiceSessionEvents()
-        check(events.accept(id:2) && !events.accept(id:1),"end preceding start prevents delayed automatic rerecording")
-        check(events.accept(id:3) && !events.accept(id:3) && !events.accept(id:2),"control copies cannot affect a later session")
-        check(VoiceSessionEvents.session(["voiceVersion":2,"voiceSession":"123456789abcdef0"])==session,"parse session control binding")
-        check(VoiceSessionEvents.session(["voiceVersion":2,"voiceSession":"0000000000000000"])==nil,"reject empty nonce")
-        var enter=VoiceEnterBuffer()
-        check(enter.receive(recording:false,ending:false),"idle Enter remains immediate")
-        check(!enter.receive(recording:true,ending:false) && enter.pending==0,"active speech does not insert Enter")
-        for _ in 0..<2 {check(!enter.receive(recording:true,ending:true),"tail Enter waits for final audio")}
-        check(enter.take(allowed:true)==2 && enter.pending==0,"preserve two quick presses after clean drain")
-        for _ in 0..<100 {_=enter.receive(recording:true,ending:true)}
-        check(enter.pending==8 && enter.take(allowed:false)==0 && enter.pending==0,"abnormal stop discards bounded pending Enter")
+        for sequence in UInt32(0)..<6 {_=bounded.accept(frame(sequence),via:.wifi,now:0)}
+        check(bounded.drain(now:1,maximum:0).isEmpty && bounded.next==0,"full PCM ring cannot consume compressed frames")
+        check(sequences(bounded.drain(now:1,maximum:2))==[0,1] && bounded.next==2,"handoff fits actual PCM headroom")
+        check(sequences(bounded.drain(now:1,maximum:1))==[2],"consumer clock owns pacing without dropping queued speech")
 
-        // Deterministic two-link timeline through the real jitter buffer. Both
-        // complementary loss and a single failed link must remain continuous.
+        // Replay a persistent delay step. The old clock kept advancing through
+        // the empty frontier, classifying every following block as late.
+        for delay in [0.35,0.7] {
+            var value=VoiceMerge(session:session,repairHistory:6)
+            var position:UInt32=0,played:[UInt32]=[]
+            for tick in 0...13000 {
+                let now=Double(tick)*0.002
+                while position<200,now>=Double(position)*0.1+(position>=20 ? delay:0) {
+                    _=value.accept(frame(position),via:.bluetooth,now:now)
+                    _=value.accept(frame(position),via:.wifi,now:now+0.001)
+                    position+=1
+                }
+                if now>=20+delay {value.finish(frames:200)}
+                played+=sequences(value.drain(now:now))
+                check(value.buffered<=Int(VoiceMerge.capacity),"delay step retains a fixed buffer bound")
+            }
+            check(played==Array(UInt32(0)..<200) && value.missing==0,"persistent transit delay preserves all produced speech")
+        }
+
         for scenario in 0..<5 {
-            var simulated=VoiceMerge(session:session)
-            var arrivals:[(Double,UInt32,ConnectionTransport)]=[]
-            let count:UInt32=600
-            for seq in UInt32(0)..<count {
-                let t=Double(seq)*0.1
-                if scenario != 1 && !(scenario==0 && seq%5==0) && !(scenario==3 && seq%35==0) {
-                    arrivals.append((t+Double(seq%4)*0.009,seq,.wifi))
+            var value=VoiceMerge(session:session)
+            var arrivals:[(at:Double,seq:UInt32,via:ConnectionTransport)]=[]
+            for seq in UInt32(0)..<600 {
+                let now=Double(seq)*0.1
+                if scenario != 1 && !(scenario==0 && seq%3==0) {
+                    arrivals.append((now+Double(seq%4)*0.009,seq,.wifi))
                 }
-                if scenario != 2 && !(scenario==0 && seq%5 != 0) && !(scenario==3 && seq%35==0) {
-                    arrivals.append((t+0.025+Double(seq%6)*0.01,seq,.bluetooth))
+                if scenario != 2 && !(scenario==0 && seq%3 != 0) {
+                    arrivals.append((now+0.03+Double(seq%7)*0.012,seq,.bluetooth))
                 }
             }
-            arrivals.sort{$0.0<$1.0};var index=0,played:[UInt32]=[];var silence=0
-            for tick in 0...Int(count)*50+300 {
+            arrivals.sort{$0.at<$1.at}
+            var position=0,played:[UInt32]=[]
+            for tick in 0...32000 {
                 let now=Double(tick)*0.002
-                while index<arrivals.count,arrivals[index].0<=now {
-                    let a=arrivals[index];_=simulated.accept(frame(a.1),via:a.2,now:now);index+=1
+                while position<arrivals.count,arrivals[position].at<=now {
+                    let event=arrivals[position]
+                    _=value.accept(frame(event.seq),via:event.via,now:now)
+                    position+=1
                 }
-                if now>=Double(count)*0.1 {simulated.finish(frames:count)}
-                for out in simulated.drain(now:now) {
-                    switch out {case .audio(let f,_):played.append(f.sequence);case .silence:silence+=1}
-                }
-                check(simulated.buffered<=8,"timeline buffer bound")
+                if now>=60 {value.finish(frames:600)}
+                // One delayed host callback must not delete the speech that
+                // was already delivered during that delay.
+                if scenario==4 && now>=20 && now<20.6 {continue}
+                played+=sequences(value.drain(now:now))
             }
-            check(Set(played).count==played.count && played==played.sorted(),"each merged frame plays once in sequence")
-            if scenario != 3 {check(played.count==Int(count) && silence==0,"continuous playback through complementary loss or one failed leg")}
-            else {check(played.count==Int(count)-18 && simulated.missing==18,"shared losses are reported instead of claimed recovered")}
+            check(played==Array(UInt32(0)..<600) && value.missing==0,"single/dual carrier and host-delay timelines preserve ordered speech")
         }
-        var delayed=VoiceMerge(session:session),played:[UInt32]=[]
-        var packets:[(Double,UInt32)]=[]
-        for seq in UInt32(0)..<100 {
-            let delay:Double=seq==5 ? 0.25:(seq==50 ? 0.3:0)
-            packets.append((Double(seq)*0.1+delay,seq))
-        }
-        packets.sort{$0.0<$1.0};var position=0
-        for tick in 0...5500 {
-            let now=Double(tick)*0.002
-            while position<packets.count,packets[position].0<=now {
-                let seq=packets[position].1
-                _=delayed.accept(frame(seq),via:.wifi,now:now);_=delayed.accept(frame(seq),via:.bluetooth,now:now);position+=1
-            }
-            if now>=10 {delayed.finish(frames:100)}
-            for out in delayed.drain(now:now) {if case .audio(let f,_)=out {played.append(f.sequence)}}
-        }
-        check(played==Array(UInt32(0)..<100) && delayed.missing==0,"shared 250/300 ms delay recovers every block once")
-        check(delayed.extraDelay<=0.2 && delayed.rescued>=2,"adaptive latency has one fixed per-recording budget")
 
-        var requests=VoiceRepairTracker(started:0,history:4)
-        var repair=VoiceMerge(session:session,repairHistory:4)
-        check(requests.request(repair,now:0.17).isEmpty,"do not request a first frame before capture can produce it")
-        check(requests.request(repair,now:0.18)==[0],"missing first frame can request repair without another audio arrival")
-        check(requests.request(repair,now:0.2).isEmpty && requests.request(repair,now:0.27)==[0],"repair request cadence is bounded")
-        check(requests.request(repair,now:0.4).isEmpty,"each missing sequence has at most two request tickets")
-        var rejected=VoiceRepairTracker(started:0,history:4)
-        let failed=rejected.request(repair,now:0.18);rejected.submissionFailed(failed,now:0.18)
-        check(rejected.sent==0 && rejected.rejected==1 && rejected.request(repair,now:0.2).isEmpty,"local rejection refunds request credit without a retry storm")
-        check(rejected.request(repair,now:0.27)==[0] && rejected.request(repair,now:0.36)==[0],"both delivery attempts remain after a local submission failure")
-        var tail=VoiceMerge(session:session,repairHistory:4)
-        _=tail.accept(frame(0),via:.wifi,now:0);tail.finish(frames:2)
-        var tailRequests=VoiceRepairTracker(started:0,history:4)
-        check(tailRequests.request(tail,now:0.02)==[1],"terminal count repairs a missing final block")
-        _=tail.accept(frame(1),via:.wifi,now:0.1)
-        check(tail.drain(now:0.12).count==1 && tail.drain(now:0.22).count==1 && tail.missing==0,"tail repair plays once before queued Enter")
-        var small=VoiceMerge(session:session,repairHistory:2)
-        _=small.accept(frame(3),via:.bluetooth,now:0)
-        var smallRequests=VoiceRepairTracker(started:0,history:2)
-        check(smallRequests.request(small,now:0.01)==[2],"two-frame fallback never requests overwritten history")
-        var noFrames=VoiceMerge(session:session,repairHistory:4);noFrames.finish(frames:0)
-        var noRequests=VoiceRepairTracker(started:0,history:4)
-        check(noRequests.request(noFrames,now:1).isEmpty,"zero-length recording never starts repair traffic")
-
-        // A single usable link, including first/final loss, with real feedback
-        // delay. Compare identical losses through the production merge policy.
         for via in [ConnectionTransport.wifi,.bluetooth] {
-            let count:UInt32=120,roundTrip:Double=via == .wifi ? 0.045:0.13
-            var merged=VoiceMerge(session:session,repairHistory:4,prefill:via == .bluetooth ? VoiceMerge.bleRepairPrefill:nil)
-            var tracker=VoiceRepairTracker(started:0,history:4)
-            var arrivals:[(Double,UInt32)]=[],played:[UInt32]=[]
-            for seq in UInt32(0)..<count where seq%17>1 && seq != count-1 {arrivals.append((Double(seq)*0.1+0.01,seq))}
-            var nextArrival=0
-            for tick in 0...6500 {
-                let now=Double(tick)*0.002
-                while nextArrival<arrivals.count,arrivals[nextArrival].0<=now {
-                    _=merged.accept(frame(arrivals[nextArrival].1),via:via,now:now);nextArrival+=1
-                }
-                if now>=Double(count)*0.1 {merged.finish(frames:count)}
-                let requested=tracker.request(merged,now:now)
-                for seq in requested where Double(seq)*0.1<=now && now-Double(seq)*0.1<=0.35 {
-                    arrivals.append((now+roundTrip,seq))
-                }
-                if !requested.isEmpty {
-                    let pending=arrivals[nextArrival...].sorted{$0.0<$1.0}
-                    arrivals=Array(arrivals[..<nextArrival])+pending
-                }
-                for out in merged.drain(now:now) {if case .audio(let f,_)=out {played.append(f.sequence)}}
-                check(merged.buffered<=8 && merged.extraDelay<=0.200001,"single-link repairs retain memory and latency bounds")
+            let rtt:Double=via == .wifi ? 0.045:0.33
+            var value=VoiceMerge(session:session,repairHistory:6)
+            var repair=VoiceRepairTracker(started:0,history:6)
+            var arrivals:[(Double,UInt32)]=[]
+            for seq in UInt32(0)..<120 where seq%17>1 && seq != 119 {
+                arrivals.append((Double(seq)*0.1+0.01,seq))
             }
-            check(played==Array(UInt32(0)..<count) && merged.missing==0,"single-link feedback restores leading, interior and trailing loss")
-            check(tracker.sent>0 && tracker.sent<50,"repair does not create unbounded acknowledgement traffic")
+            var played:[UInt32]=[]
+            for tick in 0...8000 {
+                let now=Double(tick)*0.002
+                let ready=arrivals.filter{$0.0<=now}
+                arrivals.removeAll{$0.0<=now}
+                for (_,seq) in ready {_=value.accept(frame(seq),via:via,now:now)}
+                if now>=12 {value.finish(frames:120)}
+                if let request=repair.reserve(value,now:now) {
+                    repair.complete(request.id,submission:.submitted,now:now)
+                    for seq in request.frames where Double(seq)*0.1<=now && now-Double(seq)*0.1<=0.6 {
+                        arrivals.append((now+rtt,seq))
+                    }
+                }
+                played+=sequences(value.drain(now:now,queuedDuration:VoiceMerge.prefill))
+            }
+            check(played==Array(UInt32(0)..<120) && value.missing==0,"single-link repair covers leading, interior and terminal loss")
+            check(repair.sent>0 && repair.sent<60,"repair has a bounded traffic budget")
         }
-        // Perfect reception has no acknowledgement chatter on either link.
-        repair=VoiceMerge(session:session,repairHistory:4);requests=VoiceRepairTracker(started:0,history:4)
-        for tick in 0...1100 {
-            let now=Double(tick)*0.01
-            if tick%10==0 && tick<1000 {_=repair.accept(frame(UInt32(tick/10)),via:.bluetooth,now:now)}
-            if tick>=1000 {repair.finish(frames:100)}
-            _=requests.request(repair,now:now);_=repair.drain(now:now)
+        testPlayoutReservoir(check)
+        testCarrierDelayStep(check)
+        testClock(check)
+    }
+
+    private static func testPlayoutReservoir(_ check:(Bool,String)->Void) {
+        // CoreAudio continues consuming while the network worker is delayed.
+        // A compressed prefill is useful only after it reaches the PCM queue.
+        for prefill in [0.25,VoiceMerge.prefill] {
+            let session:UInt64=100
+            var merge=VoiceMerge(session:session,prefill:prefill)
+            var produced:UInt32=0,queued=0,played=0,internalGap=0,pendingGap=0
+            var heard=false,order:[UInt32]=[]
+            for tick in 0...1600 {
+                let now=Double(tick)*0.02
+                let consumed=min(320,queued);queued-=consumed;played+=consumed
+                if consumed>0 {internalGap+=pendingGap;pendingGap=0;heard=true}
+                if heard {pendingGap+=320-consumed}
+                let paused=now>=5 && now<5.2 || now>=10 && now<10.2 || now>=15 && now<15.2
+                if paused {continue}
+                while produced<300,now+0.000001>=Double(produced)*0.1+0.03 {
+                    _=merge.accept(VoiceFrame(session:session,sequence:produced,block:Data(repeating:0,count:804)),via:.wifi,now:now)
+                    produced+=1
+                }
+                if produced==300 {merge.finish(frames:300)}
+                for output in merge.drain(now:now,maximum:(VoicePolicy.pcmCapacity-queued)/1600,queuedDuration:Double(queued)/16000) {
+                    if case .audio(let frame,_)=output {order.append(frame.sequence)}
+                    queued+=VoiceCodec.blockSamples
+                }
+            }
+            check(internalGap==0,"prefill protects the actual PCM consumer across 200 ms network-worker pauses")
+            check(order==Array(UInt32(0)..<300) && played==300*1600,"consumer-paced output preserves every sample and sequence")
         }
-        check(requests.sent==0,"healthy single-link audio sends no repair requests")
+    }
+
+    private static func testCarrierDelayStep(_ check:(Bool,String)->Void) {
+        // A healthy second carrier can be slower than the first useful route.
+        // The actual PCM clock must remain continuous when that delay appears;
+        // retaining every compressed block alone is insufficient.
+        func replay(prefill:TimeInterval)->(gap:Int,played:Int,ordered:Bool,missing:Int) {
+            var merge=VoiceMerge(session:1,prefill:prefill)
+            var next:UInt32=0,queued=0,played=0,order:[UInt32]=[]
+            var continuity=PCMContinuity()
+            for tick in 0...1600 {
+                let now=Double(tick)*0.02,n=min(320,queued)
+                queued-=n;played+=n;continuity.consume(n,requested:320)
+                while next<300,now+0.000001>=Double(next)*0.1+0.03+(next>=50 ? 0.45:0) {
+                    let frame=VoiceFrame(session:1,sequence:next,block:Data(repeating:0,count:804))
+                    _=merge.accept(frame,via:next<50 ? .wifi:.bluetooth,now:now)
+                    next+=1
+                }
+                if next==300 {merge.finish(frames:300)}
+                for output in merge.drain(now:now,maximum:(VoicePolicy.pcmCapacity-queued)/1600,
+                                           queuedDuration:Double(queued)/16000) {
+                    if case .audio(let frame,_)=output {order.append(frame.sequence)}
+                    queued+=VoiceCodec.blockSamples
+                }
+            }
+            return (continuity.samples,played,order==Array(UInt32(0)..<300),merge.missing)
+        }
+        let old=replay(prefill:0.25),current=replay(prefill:VoicePolicy.prefill)
+        check(old.gap>0 && old.missing==0,"negative control: complete packets can still leave PCM holes after a carrier delay step")
+        check(current.gap==0 && current.played==300*1600 && current.ordered && current.missing==0,
+              "one carrier-independent reservoir absorbs a 450 ms transit step without losing, repeating or changing samples")
+    }
+
+    private static func testClock(_ check:(Bool,String)->Void) {
+        var clock=DeviceEventTimeline()
+        check(!clock.accepts(milliseconds:1000),"input requires an observed device timeline")
+        clock.observe(milliseconds:1000,now:100)
+        check(clock.accepts(milliseconds:2000),"fresh input is ordered on the device timeline")
+        clock.observe(milliseconds:4000,now:103)
+        check(!clock.accepts(milliseconds:2000),"newer device metadata proves an old input is stale")
+        clock.observe(milliseconds:2000,now:104)
+        check(!clock.accepts(milliseconds:2000),"a delayed hello cannot make an old command fresh")
+        var skew=DeviceEventTimeline();skew.observe(milliseconds:0,now:0)
+        for second in 1...21600 {
+            let now=Double(second),remote=now*0.998*1000
+            skew.observe(milliseconds:remote,now:now)
+            check(skew.accepts(milliseconds:remote+50),"six-hour independent clock drift retains fresh input")
+        }
     }
 }

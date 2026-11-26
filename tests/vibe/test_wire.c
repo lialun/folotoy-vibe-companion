@@ -18,6 +18,15 @@ int main(int argc,char **argv) {
     assert(adpcm_decode_block(encoded,804,1600,decoded,1600)==1600);
     assert(!adpcm_decode_block(encoded,803,1600,decoded,1600));
     assert(!adpcm_encode_block(&st,pcm,1600,encoded,803));
+    uint8_t body[VIBE_VOICE_BODY],datagram[VIBE_VOICE_BODY+1];
+    assert(vibe_voice_encode(1,1000,encoded,sizeof(encoded),body,sizeof(body))==sizeof(body));
+    assert(vibe_voice_datagram(6,body,sizeof(body),datagram,sizeof(datagram))==817);
+    assert(datagram[0]==6 && !memcmp(datagram+1,body,sizeof(body)));
+    assert(vibe_voice_datagram(1,body,sizeof(body),datagram,sizeof(datagram))==807);
+    assert(datagram[0]==1 && datagram[1]==(1000&255) && datagram[2]==0x80);
+    assert(!memcmp(datagram+3,encoded,sizeof(encoded)));
+    assert(!vibe_voice_datagram(1,body,sizeof(body),datagram,806));
+    assert(!vibe_voice_datagram(4,body,sizeof(body),datagram,sizeof(datagram)));
     if (argc>1) {
         FILE *f=fopen(argv[1],"wb"); assert(f);
         assert(fwrite(encoded,1,804,f)==804);

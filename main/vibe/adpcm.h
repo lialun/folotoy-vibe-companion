@@ -1,17 +1,7 @@
-// main/adpcm.h —— IMA ADPCM 4:1 编解码(BLE 音频通道压缩)。
-//
-// 为什么是 ADPCM 而不是 Opus:BLE 上不去的真瓶颈是 mbuf 池(4×256B)+ "首片
-// 失败即整帧作废",不是空口带宽(见任务 design.md §3)。修掉瓶颈后 8KB/s 只需
-// 约 0.7 包/连接事件,Opus 多出的压缩率没有用处可花,却要 38.5KB 静态状态 +
-// 16KB 栈 —— 恰好挤掉修瓶颈所需的堆。ADPCM 状态 4 字节、无堆、无 alloca。
-//
-// block 独立可解:每块头部携带 predictor(该块首样本原值)与自适应 index,
-// 解码器只依赖头部,不依赖上一块 —— 丢一块只损失该块 100ms,不会污染后续。
-// 编码器的 index 跨块延续(仅为音质:避免每块从 step_table[0] 重新爬升),
-// 但既然快照进了头部,独立性不受影响;predictor 每块以首样本原值重置,
-// 顺带消除跨块误差累积。
-//
-// 位序:低半字节先(与 WAV IMA ADPCM 一致),便于 Mac 端 Python 解码对齐。
+// Independent IMA ADPCM blocks: each header carries its predictor and step
+// index. A missing block cannot corrupt the decoding of a later block. The
+// encoder retains its index between blocks for continuity; each decoder uses
+// only that block's header. Nibbles are packed low first. No heap is required.
 #pragma once
 
 #include <stdbool.h>

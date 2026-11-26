@@ -12,6 +12,14 @@
 
 ## Unreleased
 
+## v1.0.1 - 2026-11-26
+
+- Substantially improve voice stability across network conditions, strengthening complementary Wi-Fi/Bluetooth delivery and bounded single-link recovery to reduce interruptions and missing audio during brief jitter or send congestion.
+- Retry each carrier independently and use computer receipt feedback to retire redundant copies. Expand bounded voice history and improve repair, ordering and continuous playback.
+- Give recording priority in a shared voice/radio audio workspace, resuming radio after voice drains to reduce competing audio allocations.
+- Scope recording start, end, cancellation and output drain explicitly. Require a separate button gesture for Enter, preserve deduplication and cancellation fences, and fix clock divergence persistently rejecting normal Enter commands.
+- Known limits: very weak Wi-Fi without BLE can still time out. A weak-Wi-Fi stress test with injected loss produced one 20 ms playback gap. Radio may still stutter over Bluetooth; loss-free delivery is not guaranteed in every network.
+
 ## v1.0.0 - 2026-11-24
 
 - Send voice over both authorized Wi-Fi and BLE attachments when available, merging and deduplicating audio before playback. A surviving link can carry the recording without restarting input.

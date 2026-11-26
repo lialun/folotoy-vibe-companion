@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 enum ConnectionTiming {
-    static let linkFresh:TimeInterval=TransportPolicy.silence,sessionTimeout:TimeInterval=9,voiceTimeout:TimeInterval=4.5
+    static let linkFresh:TimeInterval=TransportPolicy.silence,sessionTimeout:TimeInterval=9,voiceTimeout:TimeInterval=VoicePolicy.audioTimeout
     static let bleSilenceTimeout:TimeInterval=6
 }
 struct BLEConnectionRetry {

@@ -11,6 +11,23 @@ static void connection_reply(const struct sockaddr_in *from,bool ble,const char 
     else { unsigned char packet[193];packet[0]=2;memcpy(packet+1,line,n);sendto(udp,packet,n+1,MSG_DONTWAIT,(const struct sockaddr *)from,sizeof(*from)); }
 }
 static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_in *from,bool via_ble) {
+    if (n && packet[0]==V_VOICE_FEEDBACK_TYPE) {
+        vibe_voice_feedback_t feedback;
+        if (!vibe_voice_feedback_parse(packet,n,&feedback)) return;
+        xSemaphoreTake(v_mutex,portMAX_DELAY);
+        bool credential=vibe_voice_feedback_authenticated(packet,v_status.token);
+        bool supported=v_status.voice_feedback;
+        unsigned heartbeat=v_status.heartbeat_ms;
+        xSemaphoreTake(peer_mutex,portMAX_DELAY);
+        bool endpoint=via_ble?ble_owner && vibe_peer_matches(ble_peer.sin_addr.s_addr,ble_peer.sin_port,from->sin_addr.s_addr,from->sin_port):
+            vibe_peer_matches(peer.sin_addr.s_addr,peer.sin_port,from->sin_addr.s_addr,from->sin_port);
+        bool allowed=supported && credential && endpoint && owner_client[0] && owner_seen &&
+            vibe_now()-owner_seen<vibe_peer_timeout(heartbeat) && !release_after_send;
+        uint32_t generation=owner_generation;
+        xSemaphoreGive(peer_mutex);xSemaphoreGive(v_mutex);
+        if (allowed) (void)vibe_voice_uplink_feedback(&feedback,generation);
+        return;
+    }
     if (n==V_RADIO_PACKET && packet[0]==5) {
         xSemaphoreTake(peer_mutex,portMAX_DELAY);
         bool allowed=owner_client[0] && (via_ble ? ble_owner && vibe_peer_matches(ble_peer.sin_addr.s_addr,ble_peer.sin_port,from->sin_addr.s_addr,from->sin_port) : vibe_peer_matches(peer.sin_addr.s_addr,peer.sin_port,from->sin_addr.s_addr,from->sin_port));
@@ -46,7 +63,7 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
         (approved || (authenticated && owner_client[0] && !strcmp(owner_client,client)));
     bool same_client=vibe_connect_identity(client) && owner_client[0] && !strcmp(owner_client,client);
     bool occupied=owner_seen && now-owner_seen<vibe_peer_timeout(s.heartbeat);
-    if(type && !strcmp(type,"voice.repair")) {
+    if(type && (!strcmp(type,"voice.repair") || !strcmp(type,"voice.ready") || !strcmp(type,"voice.cancel"))) {
         /* Repairs cannot claim a lease or enter the UI command queue. Only the
          * current authenticated endpoint may request this recording's cache. */
         bool endpoint=via_ble?ble_owner && vibe_peer_matches(ble_peer.sin_addr.s_addr,ble_peer.sin_port,from->sin_addr.s_addr,from->sin_port):
@@ -54,15 +71,30 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
         bool allowed=packet[0]==2 && addressed && authenticated && same_client && occupied && endpoint && !release_after_send;
         generation=owner_generation;
         xSemaphoreGive(peer_mutex);xSemaphoreGive(v_mutex);
-        uint32_t frames[4];unsigned count=0;bool valid=true;
+        if (!strcmp(type,"voice.cancel")) {
+            if (allowed) vibe_voice_uplink_cancel(vibe_voice_parse_session(link_string(o,"voiceSession")),generation);
+            cJSON_Delete(o);return;
+        }
+        if (!strcmp(type,"voice.ready")) {
+            if (allowed) vibe_voice_uplink_ready(vibe_voice_parse_session(link_string(o,"voiceSession")),generation);
+            cJSON_Delete(o);return;
+        }
+        uint32_t frames[VIBE_VOICE_MAX_REPAIR];unsigned count=0;bool valid=true;
+        uint32_t request_id=0;
+        const cJSON *id=cJSON_GetObjectItemCaseSensitive(o,"repairID");
+        if (id) {
+            if (!cJSON_IsNumber(id) || !(id->valuedouble>=1 && id->valuedouble<=UINT32_MAX) ||
+                id->valuedouble!=(double)(uint32_t)id->valuedouble) valid=false;
+            else request_id=(uint32_t)id->valuedouble;
+        }
         const cJSON *items=cJSON_GetObjectItemCaseSensitive(o,"frames");
-        if(!cJSON_IsArray(items) || cJSON_GetArraySize(items)<1 || cJSON_GetArraySize(items)>4)valid=false;
+        if(!cJSON_IsArray(items) || cJSON_GetArraySize(items)<1 || cJSON_GetArraySize(items)>VIBE_VOICE_MAX_REPAIR)valid=false;
         if(valid)for(const cJSON *item=items->child;item;item=item->next) {
             if(!cJSON_IsNumber(item) || !(item->valuedouble>=0 && item->valuedouble<VIBE_VOICE_MAX_FRAMES) ||
                item->valuedouble!=(double)(uint32_t)item->valuedouble){valid=false;break;}
             frames[count++]=(uint32_t)item->valuedouble;
         }
-        if(allowed && valid)(void)voice_repair_request(vibe_voice_parse_session(link_string(o,"voiceSession")),frames,count,generation);
+        if(allowed && valid)(void)vibe_voice_repair_request(vibe_voice_parse_session(link_string(o,"voiceSession")),frames,count,generation,request_id);
         cJSON_Delete(o);return;
     }
     if (pair && vibe_message_post_link_json(v_queue,(const char *)packet+1,n-1,0)) {

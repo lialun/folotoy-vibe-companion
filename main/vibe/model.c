@@ -149,6 +149,7 @@ unsigned vibe_model_key(vibe_model_t *m, vibe_key_t key, vibe_event_t event, uin
         if ((event==V_CLICK || event==V_LONG) && key==V_SETTINGS) { m->provision_to_ble=false;return V_FINISH_PROVISION; }
     } else if (m->page == V_HOME) {
         if (key == V_UP && event == V_PRESS && m->voice_ready && !m->recording) {
+            if (++m->voice_request==0) ++m->voice_request;
             m->recording=true; m->recording_since_ms=now; return V_START_AUDIO;
         }
         if (m->recording) return 0;

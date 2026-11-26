@@ -4,6 +4,7 @@ enum ShortcutSleepTests {
     static func run(_ check:(Bool,String)->Void) {
         var events:[(UInt16,Bool,UInt64)]=[]
         let keyboard=Shortcut(permissionCheck:{true},eventSink:{events.append(($0,$1,$2))})
+        check(keyboard.inputReady && !Shortcut(permissionCheck:{false},eventSink:{_,_,_ in}).inputReady,"input readiness follows the injected keyboard port")
         check((try? keyboard.start("ctrl+option+v"))==true && events.count==3,"voice shortcut starts in an awake session")
         keyboard.suspendForSleep()
         check(events.count==6 && events.suffix(3).map{$0.0}==[9,58,59] && events.suffix(3).allSatisfy{!$0.1} && events.last?.2==0,"sleep releases held keys in reverse order and clears all modifier flags")

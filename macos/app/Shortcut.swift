@@ -85,6 +85,7 @@ final class Shortcut {
     init(permissionCheck:@escaping ()->Bool={Shortcut.permitted},eventSink:((CGKeyCode,Bool,UInt64)->Void)?=nil) {
         self.permissionCheck=permissionCheck;self.eventSink=eventSink
     }
+    var inputReady:Bool {permissionCheck()}
     private func post(_ code:CGKeyCode,down:Bool) {
         if Self.modifiers[code] != nil { if down { flags.insert(code) } else { flags.remove(code) } }
         let rawFlags=flags.reduce(UInt64(0)) { $0 | (Self.modifiers[$1] ?? 0) }
@@ -111,10 +112,11 @@ final class Shortcut {
     func resume(if allowed:()->Bool={true}) {
         stateLock.lock();defer{stateLock.unlock()};if allowed() {sleeping=false}
     }
-    func enter() {
+    @discardableResult func enter()->Bool {
         stateLock.lock();defer{stateLock.unlock()}
-        guard !sleeping,permissionCheck(), pressed.isEmpty else { return }
-        post(36,down:true); Thread.sleep(forTimeInterval:0.04); post(36,down:false)
+        guard !sleeping,permissionCheck(), pressed.isEmpty else { return false }
+        post(36,down:true); post(36,down:false)
+        return true
     }
     deinit { stop() }
 }

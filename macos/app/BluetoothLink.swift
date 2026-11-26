@@ -2,30 +2,6 @@ import Foundation
 import CoreBluetooth
 import os
 
-struct BLEFrame {
-    private var data=Data(),identifier:UInt8=0,total=0,started=Date.distantPast
-    mutating func accept(_ fragment:Data,now:Date=Date())->Data? {
-        let bytes=Array(fragment)
-        guard bytes.count>7,bytes[0]==0x56,bytes[2]&0xfc==0 else { data=Data();total=0;return nil }
-        let length=Int(bytes[3])|Int(bytes[4])<<8,offset=Int(bytes[5])|Int(bytes[6])<<8
-        guard length>0,length<=1537,offset+bytes.count-7<=length else { data=Data();total=0;return nil }
-        if bytes[2]&1 != 0 { identifier=bytes[1];total=length;data=Data();started=now }
-        guard identifier==bytes[1],total==length,offset==data.count,now>=started,now.timeIntervalSince(started)<=2 else { data=Data();total=0;return nil }
-        data.append(contentsOf:bytes.dropFirst(7))
-        if bytes[2]&2 != 0 { let result=data.count==total ? data : nil;data=Data();total=0;return result }
-        return nil
-    }
-    static func fragments(_ packet:Data,identifier:UInt8,limit:Int,media:Bool=false)->[Data] {
-        guard !packet.isEmpty,packet.count<=1537,limit>7 else { return [] }
-        let bytes=Array(packet),step=limit-7
-        return stride(from:0,to:bytes.count,by:step).map { offset in
-            let end=min(offset+step,bytes.count)
-            var frame=Data([0x56,identifier,(offset==0 ? 1:0)|(end==bytes.count ? 2:0)|(media ? 4:0),UInt8(bytes.count&255),UInt8(bytes.count>>8),UInt8(offset&255),UInt8(offset>>8)])
-            frame.append(contentsOf:bytes[offset..<end]);return frame
-        }
-    }
-}
-
 final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate {
     private let log=Logger(subsystem:"io.github.vibecompanion.mac",category:"bluetooth")
     static let service=CBUUID(string:"71DF1000-7B51-4A1D-A9B3-5A7669626532")
@@ -34,15 +10,17 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
     private let txID=CBUUID(string:"71DF1003-7B51-4A1D-A9B3-5A7669626532")
     private var central:CBCentralManager!,peripherals:[String:CBPeripheral]=[:]
     private var selected:CBPeripheral?,device="",rx:CBCharacteristic?,info:CBCharacteristic?
-    private var radioNextWrite=Date.distantPast,radioWriteScheduled=false
+    private var pacing=BLEWritePacing(),writeWake:DispatchSourceTimer?
     var radioWithoutResponse:Bool {rx?.properties.contains(.writeWithoutResponse) ?? false}
     var queuedWrites:Int {frames.count}
     private var notificationReady=false,lastReceived=Date.distantPast
     private var enabled=true
     private var retries:[String:BLEConnectionRetry]=[:]
     private var writeLogCount=0,readLogCount=0,frameLogCount=0,packetLogCount=0
-    private var frames=BLEWriteBuffer(),writing=false,sequence:UInt8=0,decoder=BLEFrame(),generation=0
+    private var frames=BLEWriteBuffer(),flight=BLEWriteFlight(),sequence:UInt8=0,decoder=BLEFrame(),generation=0
     private var writeRetry=BLEWriteRetry()
+    private var repairSequence:UInt64=0
+    private var repairCompletion:(id:UInt64,callback:VoiceRepairCompletion)?
     var isActive:Bool { notificationReady && selected?.state == .connected }
     private let queue:DispatchQueue
     var onFound:((String,UUID,Bool)->Void)?
@@ -87,9 +65,9 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         if selected != nil { log.info("Cancelling BLE link caller=\(caller,privacy:.public)") }
         generation+=1
         if let selected=selected { central.cancelPeripheralConnection(selected) }
-        selected=nil;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame()
-        writeRetry.reset()
+        selected=nil;rx=nil;info=nil;decoder=BLEFrame()
         notificationReady=false;lastReceived = .distantPast
+        resetWrites()
     }
     func disconnect(after delay:TimeInterval,when allowed:@escaping ()->Bool) {
         let expected=generation
@@ -122,38 +100,104 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
             } else { self.watchSilence(expected) }
         }
     }
-    @discardableResult func send(_ packet:Data)->Bool {
+    @discardableResult func send(_ packet:Data,voice:Bool=false)->Bool {
         guard let peripheral=selected,let rx=rx,peripheral.state == .connected else { return false }
         sequence &+= 1
-        let parts=BLEFrame.fragments(packet,identifier:sequence,limit:min(244,peripheral.maximumWriteValueLength(for:.withoutResponse)),media:packet.first==5)
-        guard frames.append(parts,radio:packet.first==5,key:packet.first==5 ? Data(packet.prefix(13)):nil) else { return false };writeNext(peripheral,rx);return true
+        let radio=packet.first==5
+        // Keep one write kind for control and repairs so CoreBluetooth cannot
+        // interleave their assemblies. Credits bound fragments; pacing below
+        // separately bounds production of complete background requests.
+        let kind:CBCharacteristicWriteType=rx.properties.contains(.writeWithoutResponse) ? .withoutResponse:.withResponse
+        // With-response reports long-write capacity on some peers. Keep each
+        // application fragment inside one ATT value rather than relying on
+        // Prepare/Execute Write support in the peripheral.
+        let limit=min(244,peripheral.maximumWriteValueLength(for:.withoutResponse),peripheral.maximumWriteValueLength(for:kind))
+        let parts=BLEFrame.fragments(packet,identifier:sequence,limit:limit,media:radio)
+        guard frames.append(parts,radio:radio,key:radio ? Data(packet.prefix(13)):nil,voice:voice,feedback:packet.first==7,writing:flight.inFlight) else { return false }
+        writeNext(peripheral,rx);return true
     }
-    func discardRadio() { frames.discardRadio(writing:writing) }
+    func sendVoiceRepair(_ packet:Data,completion:@escaping VoiceRepairCompletion) {
+        guard let peripheral=selected,let rx,peripheral.state == .connected else {
+            completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return
+        }
+        sequence &+= 1;repairSequence &+= 1
+        let limit=min(244,peripheral.maximumWriteValueLength(for:.withoutResponse),peripheral.maximumWriteValueLength(for:.withResponse))
+        let parts=BLEFrame.fragments(packet,identifier:sequence,limit:limit)
+        let repair=BLEWriteBuffer.Repair(id:repairSequence,deadline:ProcessInfo.processInfo.systemUptime+VoicePolicy.repairQueueLifetime)
+        guard frames.append(parts,radio:false,repair:repair,writing:flight.inFlight) else {
+            completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return
+        }
+        repairCompletion=(repair.id,completion)
+        let expected=generation
+        queue.asyncAfter(deadline:.now()+VoicePolicy.repairQueueLifetime) { [weak self] in
+            guard let self,self.enabled,self.generation==expected,self.repairCompletion?.id==repair.id else {return}
+            let expired=self.frames.discardExpiredRepairs(now:ProcessInfo.processInfo.systemUptime,writing:self.flight.inFlight)
+            self.applyRemoval(expired)
+            if let peripheral=self.selected,let rx=self.rx {self.writeNext(peripheral,rx)}
+        }
+        writeNext(peripheral,rx)
+    }
+    private func finishRepairs(_ results:[BLEWriteBuffer.RepairResult]) {
+        for result in results {
+            guard let pending=repairCompletion,pending.id==result.id else {continue}
+            repairCompletion=nil
+            pending.callback(result.submission,ProcessInfo.processInfo.systemUptime)
+        }
+    }
+    private func resetWrites() {
+        let repairs=frames.reset(writing:flight.inFlight)
+        flight.reset();writeRetry.reset();pacing=BLEWritePacing()
+        writeWake?.cancel();writeWake=nil;finishRepairs(repairs)
+    }
+    private func applyRemoval(_ removed:BLEWriteBuffer.Removal) {
+        if removed.headRemoved {flight.headRemoved();writeRetry.reset()}
+        finishRepairs(removed.repairs)
+    }
+    func discardRadio() {
+        let removed=frames.discardRadio(writing:flight.inFlight);applyRemoval(removed)
+        if let peripheral=selected,let rx {writeNext(peripheral,rx)}
+    }
+    func discardVoiceRepair() {
+        let removed=frames.discardVoiceRepair(writing:flight.inFlight);applyRemoval(removed)
+        if let peripheral=selected,let rx {writeNext(peripheral,rx)}
+    }
     func acknowledgeRadio(session:UInt64,next:UInt32,mask:UInt16) {
-        frames.acknowledgeRadio(session:session,next:next,mask:mask,writing:writing)
+        let removed=frames.acknowledgeRadio(session:session,next:next,mask:mask,writing:flight.inFlight);applyRemoval(removed)
         if let peripheral=selected,let rx=rx {writeNext(peripheral,rx)}
     }
     private func writeNext(_ peripheral:CBPeripheral,_ characteristic:CBCharacteristic) {
-        guard enabled,!writing else { return }
-        while let frame=frames.first {
-            if frames.firstIsRadio,Date()<radioNextWrite {
-                if !radioWriteScheduled {
-                    radioWriteScheduled=true;let expected=generation
-                    queue.asyncAfter(deadline:.now()+max(0,radioNextWrite.timeIntervalSinceNow)) { [weak self,weak peripheral] in
-                        guard let self=self else {return};self.radioWriteScheduled=false
-                        guard let peripheral=peripheral,self.generation==expected,let rx=self.rx else {return};self.writeNext(peripheral,rx)
-                    }
-                }
-                return
-            }
-            if frames.firstIsRadio && characteristic.properties.contains(.writeWithoutResponse) {
+        guard enabled,!flight.busy else { return }
+        let expired=frames.discardExpiredRepairs(now:ProcessInfo.processInfo.systemUptime)
+        applyRemoval(expired)
+        while !frames.isEmpty {
+            let now=ProcessInfo.processInfo.systemUptime
+            let budget=pacing
+            frames.selectReady{budget.delay($0,now:now)==0}
+            guard let frame=frames.first,let kind=frames.firstKind else {return}
+            let delay=pacing.delay(kind,now:now)
+            if delay>0 {wakeWrites(after:delay);return}
+            if characteristic.properties.contains(.writeWithoutResponse) {
                 guard peripheral.canSendWriteWithoutResponse else { return }
-                peripheral.writeValue(frame,for:characteristic,type:.withoutResponse);frames.acknowledge()
-                if frame[2]&2 != 0 {radioNextWrite=Date().addingTimeInterval(0.05)}
+                peripheral.writeValue(frame,for:characteristic,type:.withoutResponse)
+                if let repair=frames.acknowledge() {finishRepairs([repair])}
+                if frame[2]&2 != 0 {pacing.completed(kind,now:ProcessInfo.processInfo.systemUptime)}
             } else {
-                writing=true;peripheral.writeValue(frame,for:characteristic,type:.withResponse);return
+                flight.begin();peripheral.writeValue(frame,for:characteristic,type:.withResponse);return
             }
         }
+    }
+    private func wakeWrites(after delay:TimeInterval) {
+        if writeWake==nil {
+            let timer=DispatchSource.makeTimerSource(queue:queue),expected=generation
+            timer.setEventHandler { [weak self] in
+                guard let self,self.enabled,self.generation==expected else {return}
+                self.writeWake?.cancel();self.writeWake=nil
+                if let peripheral=self.selected,let rx=self.rx {self.writeNext(peripheral,rx)}
+            }
+            writeWake=timer;timer.resume()
+        }
+        // Re-arm for the current head, including a newly eligible radio packet.
+        writeWake?.schedule(deadline:.now()+delay,leeway:.milliseconds(1))
     }
     func centralManagerDidUpdateState(_ central:CBCentralManager) {
         guard enabled else { return }
@@ -201,7 +245,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         guard peripheral.identifier==selected?.identifier,invalidatedServices.contains(where:{$0.uuid==Self.service}) else {return}
         // A firmware update can change properties while the encrypted bond is
         // retained. Rediscover without forgetting the device or its authority.
-        generation+=1;notificationReady=false;rx=nil;info=nil;frames.reset();writing=false;decoder=BLEFrame();writeRetry.reset()
+        generation+=1;notificationReady=false;rx=nil;info=nil;decoder=BLEFrame();resetWrites()
         onDisconnected?("蓝牙服务正在更新")
         peripheral.discoverServices([Self.service])
     }
@@ -217,7 +261,7 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         if error != nil { failed("无法订阅蓝牙数据，稍后自动重试") }
         else if characteristic.isNotifying {
             if !notificationReady {
-                notificationReady=true;lastReceived=Date();watchSilence(generation)
+                notificationReady=true;lastReceived=Date();watchSilence(generation);onStatus?("")
                 log.info("BLE notifications ready");onReady?()
             }
         } else { failed("蓝牙通知已停止，稍后自动重试") }
@@ -251,19 +295,25 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         guard peripheral.identifier==selected?.identifier,let rx=rx else { return };writeNext(peripheral,rx)
     }
     func peripheral(_ peripheral:CBPeripheral,didWriteValueFor characteristic:CBCharacteristic,error:Error?) {
-        guard peripheral.identifier==selected?.identifier,characteristic === rx else { return }
+        guard peripheral.identifier==selected?.identifier,characteristic === rx,flight.inFlight else { return }
+        if frames.firstCancelled {
+            frames.acknowledge();flight.complete();writeRetry.reset()
+            if let rx {writeNext(peripheral,rx)}
+            return
+        }
         if let error=error {
             let e=error as NSError
             log.error("BLE write failed domain=\(e.domain,privacy:.public) code=\(e.code) message=\(e.localizedDescription,privacy:.public)")
             if Self.isWriteCongestion(error),let delay=writeRetry.delay() {
-                let expected=generation
+                let expected=generation,attempt=flight.deferRetry()
                 log.notice("BLE write congested; retry=\(self.writeRetry.attempts) delay_ms=\(Int(delay*1000)) queued=\(self.frames.count)")
-                // Keep writing=true and retain the first fragment. Other
-                // producers cannot bypass backoff or overwrite this write.
+                // Retain the packet, but no ATT fragment is in flight now.
+                // Cancellation may remove it and invalidate this timer.
                 queue.asyncAfter(deadline:.now()+delay) { [weak self,weak peripheral] in
                     guard let self=self,self.enabled,self.generation==expected,
-                          let peripheral=peripheral,peripheral.identifier==self.selected?.identifier,let rx=self.rx else {return}
-                    self.writing=false;self.writeNext(peripheral,rx)
+                          let peripheral=peripheral,peripheral.identifier==self.selected?.identifier,let rx=self.rx,
+                          self.flight.resume(attempt) else {return}
+                    self.writeNext(peripheral,rx)
                 }
                 return
             }
@@ -275,7 +325,11 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         }
         if writeLogCount<6 { log.info("BLE write acknowledged bytes=\(self.frames.first?.count ?? 0)");writeLogCount+=1 }
         onStatus?("")
-        frames.acknowledge();writing=false;writeRetry.reset()
+        if let kind=frames.firstKind,let frame=frames.first,frame[2]&2 != 0 {
+            pacing.completed(kind,now:ProcessInfo.processInfo.systemUptime)
+        }
+        let repair=frames.acknowledge();flight.complete();writeRetry.reset()
+        if let repair {finishRepairs([repair])}
         if let rx=rx { writeNext(peripheral,rx) }
     }
 }

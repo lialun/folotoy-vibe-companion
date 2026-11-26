@@ -154,7 +154,7 @@ bool cancel(){return cancelled.load();}
 int main(){
  for(int repeat=0;repeat<3;repeat++)for(int mode=0;mode<31;mode++){
   writes=frames=errors=consumed_bytes=0;volume_changes=0;fail_mode=mode;cancelled=false;
-  const auto result=vibe_radio_session("http://fixture/radio",cancel);
+  const auto result=vibe_radio_session("http://fixture/radio",cancel,nullptr);
   const bool played=result==V_RADIO_SESSION_PLAYED;
   assert(readers==0&&decoders==0&&registrations==0&&in_read==0&&frame_decoders==0&&!adopted_frame);
   if(mode==0 || mode==8)assert(played&&writes>1);

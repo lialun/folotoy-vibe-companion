@@ -15,10 +15,29 @@ struct ConnectionState {
 
 final class Engine {
     private let voiceLog=Logger(subsystem:"io.github.vibecompanion.mac",category:"voice")
-    private var voiceStarted=Date.distantPast,voiceInitialPackets=0,voiceInitialDropped=0,voiceMaxGap=0.0
     private let work=DispatchQueue(label:"vibe.network")
+    private var inputPermitted:Bool {keyboard.inputReady}
+#if VIBE_VOICE_BENCH
+    private var benchRun:VoiceBenchRun?
+    func attachVoiceBench(_ run:VoiceBenchRun) {
+        work.async {
+            self.benchRun=run
+            run.send={ [weak self] body in
+                guard let self,self.authenticated else{return false}
+                var command=body;command["token"]=self.token
+                return self.sendOnAvailableLinks(command)
+            }
+        }
+    }
+#endif
+    private let bleEnabled:Bool
     private let lanEnabled:Bool
-    private let keyboard=Shortcut(),sink=AudioSink()
+    private let keyboard:Shortcut
+    private let output:VoicePCMOutput
+    private let inputCommands=InputCommands()
+    private lazy var voice=makeVoiceSession()
+    private var voiceTimer:DispatchSourceTimer?
+    private var active:Bool {voice.active}
     private var socketFD:Int32 = -1
     private var localPort:UInt16=0,socketGeneration=0
     private var reader:DispatchSourceRead?,timer:DispatchSourceTimer?
@@ -28,18 +47,9 @@ final class Engine {
     private var bluetooth:BluetoothLink?
     private var transport=ConnectionTransport.wifi
     private var transportPolicy=TransportPolicy()
-    private var voiceLoss=VoiceLossWindow()
-    private var voiceWiFiPackets=0,voiceBLEPackets=0
-    private var voiceMerge:VoiceMerge?,voiceClock:DispatchSourceTimer?
-    private var voiceRepair:VoiceRepairTracker?
-    private var voiceEvents=VoiceSessionEvents()
     private var voiceEventScope=""
-    private var voiceTailDeadline:TimeInterval?
-    private var voiceEnter=VoiceEnterBuffer()
     private var audioAvailable=false,audioProbeBusy=false,audioProbeGeneration=0
     private var lastAudioProbe=Date.distantPast,lastAudioUI:TimeInterval=0
-    private var voiceObservedAt:TimeInterval?,voiceActivity:NSObjectProtocol?
-    private static let voiceActivityOptions:ProcessInfo.ActivityOptions=[.userInitiatedAllowingIdleSystemSleep,.latencyCritical]
     private var authenticated=false,pairing=false,running=false,tearingDown=false
     private let lifecycle=EngineLifecycle()
     private var paused:Bool {get{lifecycle.userPaused} set{lifecycle.userPaused=newValue}}
@@ -49,8 +59,7 @@ final class Engine {
     private var requestDelivered=false
     private var wifiLastSeen=Date.distantPast,bleLastSeen=Date.distantPast
     private var connectionMessage="",searchStarted=Date()
-    private var lastSeen=Date.distantPast,lastAudio=Date.distantPast,lastBeacon=Date.distantPast,lastKey=Date.distantPast
-    private var generation=0,sequence:UInt8?,active=false,ending=false
+    private var lastSeen=Date.distantPast,lastBeacon=Date.distantPast
     private var pending:[String:(body:[String:Any],tries:Int,at:Date,kind:String)]=[:]
     private var state=ConnectionState()
     private var shortcut="ctrl+option+v"
@@ -81,8 +90,13 @@ final class Engine {
     var onState:((ConnectionState)->Void)?
     var onSettings:((DeviceSettings,String)->Void)?
     var onResult:((Bool,String)->Void)?
-    init(preview:Bool=false,lanEnabled:Bool=true,connectionPaused:Bool=false) {
-        self.lanEnabled=lanEnabled
+    init(preview:Bool=false,lanEnabled:Bool=true,bleEnabled:Bool=true,connectionPaused:Bool=false,keyboard:Shortcut=Shortcut(),output:VoicePCMOutput=AudioSink()) {
+        self.keyboard=keyboard;self.output=output;self.lanEnabled=lanEnabled;self.bleEnabled=bleEnabled
+        inputCommands.postEnter={ [weak self] in
+            guard let self,!self.powerSuspended,self.authenticated,!self.paused else {return false}
+            return self.keyboard.enter()
+        }
+        inputCommands.log={ [weak self] message in self?.voiceLog.notice("\(message,privacy:.public)") }
         lifecycle.userPaused=connectionPaused
         if preview { return }
         clientID=ComputerIdentity.load()
@@ -96,6 +110,7 @@ final class Engine {
         guard !running,!powerSuspended else { return }
         running=true
         keyboard.resume(if:{!self.powerSuspended})
+        if bleEnabled {
         let ble=BluetoothLink(queue:self.work);self.bluetooth=ble
         ble.onFound={ [weak self,weak ble] id,identifier,connectable in
             guard let self=self,!self.powerSuspended else { return }
@@ -136,6 +151,7 @@ final class Engine {
         ble.onPairingRepairChanged={ [weak self] id,required in
             guard let self=self,!self.powerSuspended else {return};self.setBluetoothPairingRepair(id,required:required)
         }
+        }
         self.startTimer();self.open()
     }
     private static var bleEndpoint:sockaddr_in {
@@ -157,7 +173,7 @@ final class Engine {
         let needsConnection=token.isEmpty,paused=self.paused,message=connectionMessage,selected=device,searchAge=Date().timeIntervalSince(searchStarted)
         let targetAvailable=state.devices.contains(where:{$0.id==device})
         DispatchQueue.main.async {
-            copy.permission=Shortcut.permitted
+            copy.permission=self.inputPermitted
             copy.message=copy.recording ? "正在语音输入" : copy.connected ? "已连接" : !message.isEmpty ? message : paused ? "已断开" : selected.isEmpty ? (copy.devices.isEmpty ? (searchAge>10 ? "未发现设备" : "正在查找设备…") : "请选择设备") : !targetAvailable && searchAge>10 ? "未发现所选设备" : !copy.paired && !copy.waitingForConfirmation && needsConnection ? "点击设备连接" : "正在连接…"
             self.onState?(copy)
         }
@@ -253,21 +269,21 @@ final class Engine {
     }
     private func updateTransport() {
         let previous=transport
-        let severe=active && !ending && voiceMerge==nil && voiceLoss.severe(now:Date())
+        let severe=active && !voice.isDraining && voice.usesLegacy && voice.hasSevereLegacyLoss(now:Date())
         guard let change=transportPolicy.select(current:transport,wifi:wifiLastSeen,ble:bleLastSeen,now:Date(),
-                                               voiceStarted:active && !ending && voiceMerge==nil ? voiceStarted:nil,audio:lastAudio,severeLoss:severe) else {return}
+                                               voiceStarted:active && !voice.isDraining && voice.usesLegacy ? voice.startedDate:nil,audio:voice.lastAudioDate,severeLoss:severe) else {return}
         transport=change.transport
         peer=transport == .wifi ? discovery.devices[device]?.endpoint:Self.bleEndpoint
         if transport != previous && authenticated && !paused && !token.isEmpty {
-            voiceLog.info("Transport changed from=\(previous.rawValue,privacy:.public) to=\(self.transport.rawValue,privacy:.public) reason=\(change.reason,privacy:.public) recording=\(self.active) loss_pct=\(self.voiceLoss.percent)")
+            voiceLog.info("Transport changed from=\(previous.rawValue,privacy:.public) to=\(self.transport.rawValue,privacy:.public) reason=\(change.reason,privacy:.public) recording=\(self.active) loss_pct=\(self.voice.legacyLoss.percent)")
             beacon(broadcast:false);lastBeacon=Date()
         }
-        voiceLoss.reset(now:Date())
+        voice.resetLegacyLoss()
     }
-    @discardableResult private func sendOnAvailableLinks(_ body:[String:Any],type:UInt8=2)->Bool {
+    @discardableResult private func sendOnAvailableLinks(_ body:[String:Any],type:UInt8=2,voice:Bool=false)->Bool {
         var sent=false
         if let found=discovery.devices[device],found.hasWiFi { if send(body,type:type,to:found.endpoint){sent=true} }
-        if bluetooth?.isActive==true { if send(body,type:type,viaBLE:true){sent=true} }
+        if bluetooth?.isActive==true { if send(body,type:type,viaBLE:true,voice:voice){sent=true} }
         return sent
     }
     func disconnectDevice() { paused=true;work.async {
@@ -278,16 +294,45 @@ final class Engine {
     func unpairDevice() { work.async {
         guard self.authenticated else { return };self.request("pc.unpair",extra:[:])
     } }
-    @discardableResult private func send(_ body:[String:Any],type:UInt8=2,to target:sockaddr_in?=nil,viaBLE:Bool=false)->Bool {
+    @discardableResult private func send(_ body:[String:Any],type:UInt8=2,to target:sockaddr_in?=nil,viaBLE:Bool=false,voice:Bool=false)->Bool {
         guard !powerSuspended || tearingDown else {return false}
+        guard let packet=encode(body,type:type) else {return false}
+        if viaBLE || (transport == .bluetooth && target==nil) {
+            return bluetooth?.send(packet,voice:voice)==true
+        }
+        guard socketFD>=0 else { return false }
+        return LANSocket.send(packet,from:socketFD,to:target ?? peer ?? sockaddr_in())
+    }
+    private func encode(_ body:[String:Any],type:UInt8)->Data? {
         var payload=body
         if payload["device"]==nil && type != 3 { payload["device"]=device }
         if payload["client"]==nil && type != 3 { payload["client"]=clientID }
-        guard let data=try? JSONSerialization.data(withJSONObject:payload),data.count<=1536 else { return false }
+        guard let data=try? JSONSerialization.data(withJSONObject:payload),data.count<=1536 else { return nil }
         var packet=Data([type]);packet.append(data)
-        if viaBLE || (transport == .bluetooth && target==nil) { return bluetooth?.send(packet)==true }
-        guard socketFD>=0 else { return false }
-        return LANSocket.send(packet,from:socketFD,to:target ?? peer ?? sockaddr_in())
+        return packet
+    }
+    private func sendVoiceRepair(_ body:[String:Any],completion:@escaping VoiceRepairCompletion) {
+        guard authenticated,!paused,!powerSuspended else {
+            completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return
+        }
+        var command=body;command["token"]=token
+        guard let packet=encode(command,type:2) else {
+            completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return
+        }
+        let endpoint=discovery.devices[device].flatMap{$0.hasWiFi && socketFD>=0 ? $0.endpoint:nil}
+        let ble=bluetooth?.isActive==true ? bluetooth:nil
+        guard endpoint != nil || ble != nil else {
+            completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return
+        }
+        var receipt=VoiceRepairReceipt(wifi:endpoint != nil,bluetooth:ble != nil)
+        let finish:(ConnectionTransport,VoiceRepairSubmission,TimeInterval)->Void={leg,result,now in
+            if let combined=receipt.complete(leg,result) {completion(combined,now)}
+        }
+        if let endpoint {
+            let result=LANSocket.send(packet,from:socketFD,to:endpoint)
+            finish(.wifi,result ? .submitted:.notSubmitted,ProcessInfo.processInfo.systemUptime)
+        }
+        ble?.sendVoiceRepair(packet) {result,now in finish(.bluetooth,result,now)}
     }
     private func destinations() -> [sockaddr_in] {
         var result:[sockaddr_in]=[];var head:UnsafeMutablePointer<ifaddrs>?
@@ -312,16 +357,16 @@ final class Engine {
     }
     private func beacon(broadcast:Bool) {
         var body=LANSocket.beacon(port:localPort,token:broadcast ? "" : token,audioReady:audioAvailable,
-            hotkeyReady:Shortcut.permitted,epoch:Int(Date().timeIntervalSince1970),tz:TimeZone.current.secondsFromGMT()/60)
+            hotkeyReady:self.inputPermitted,epoch:Int(Date().timeIntervalSince1970),tz:TimeZone.current.secondsFromGMT()/60)
         if broadcast {
             guard lanEnabled else { return }
             var sent=false
             for dest in destinations() { if send(body,type:3,to:dest) { sent=true } }
             if !sent && transport == .wifi { state.error="局域网发送失败，请检查网络和局域网权限" }
-        } else if !paused { body["device"]=device;body["client"]=clientID;body["primaryTransport"]=transport.rawValue;body["voiceV2"]=1;body["voiceRepair"]=1;body["radioPCM"]=1;body["radioFormats"]=RadioFormat.supportedMask;sendOnAvailableLinks(body,type:3) }
+        } else if !paused { body["device"]=device;body["client"]=clientID;body["primaryTransport"]=transport.rawValue;body.merge(VoiceCapabilities.advertised){_,new in new};body["radioPCM"]=1;body["radioFormats"]=RadioFormat.supportedMask;sendOnAvailableLinks(body,type:3) }
     }
     private func sendStatus() {
-        if !token.isEmpty { send(["type":"pc.status","token":token,"voiceV2":1,"voiceRepair":1,"radioPCM":1,"radioFormats":RadioFormat.supportedMask,"audioReady":audioAvailable,"hotkeyReady":Shortcut.permitted,"epoch":Int(Date().timeIntervalSince1970),"tz":TimeZone.current.secondsFromGMT()/60,"idleHeartbeat":LANSocket.negotiatedHeartbeatSeconds]) }
+        if !token.isEmpty { send(VoiceCapabilities.advertised.merging(["type":"pc.status","token":token,"radioPCM":1,"radioFormats":RadioFormat.supportedMask,"audioReady":audioAvailable,"hotkeyReady":self.inputPermitted,"epoch":Int(Date().timeIntervalSince1970),"tz":TimeZone.current.secondsFromGMT()/60,"idleHeartbeat":LANSocket.negotiatedHeartbeatSeconds]){_,new in new}) }
     }
     func updateAgentQuotas(_ samples:[AgentQuotaSample]) { work.async {
         let next=Dictionary(uniqueKeysWithValues:samples.map{($0.agent,$0)})
@@ -354,6 +399,12 @@ final class Engine {
     }
     private func tick() {
         guard !powerSuspended else { return }
+#if VIBE_VOICE_BENCH
+        if let run=benchRun {
+            let wifi=Date().timeIntervalSince(wifiLastSeen)<3,ble=Date().timeIntervalSince(bleLastSeen)<3
+            run.tick(connected:authenticated && (run.plan.transport == .ble || wifi) && (run.plan.transport == .wifi || ble),recording:active)
+        }
+#endif
         probeAudio()
         let now=Date()
         // Fresh connectable advertisements drive automatic BLE attachment via
@@ -368,10 +419,7 @@ final class Engine {
         if now.timeIntervalSince(lastDiscovery)>(authenticated ? 10 : 2) {
             beacon(broadcast:true);lastDiscovery=now
         }
-        if active && now.timeIntervalSince(lastAudio)>ConnectionTiming.voiceTimeout { endVoice(immediate:true,reason:"audio-timeout") }
-        else if active && now.timeIntervalSince(lastKey)>180 { endVoice(immediate:true,reason:"recording-limit") }
-        else if active && !Shortcut.permitted { endVoice(immediate:true,reason:"permission-lost") }
-        let readiness="\(audioAvailable)/\(Shortcut.permitted)/\(TimeZone.current.secondsFromGMT())"
+        let readiness="\(audioAvailable)/\(self.inputPermitted)/\(TimeZone.current.secondsFromGMT())"
         let changed=readiness != lastReadiness;lastReadiness=readiness
         if now.timeIntervalSince(lastBeacon)>=1 || (changed && peer != nil) {
             if !paused && peer != nil && !token.isEmpty { beacon(broadcast:false) };lastBeacon=now
@@ -456,7 +504,9 @@ final class Engine {
             if reconnect { recentEvents=[];settingsRevision=nil }
             bootID=body["boot"] as? Int
             let scope="\(device)/\(bootID ?? -1)"
-            if voiceEventScope != scope {voiceEventScope=scope;voiceEvents=VoiceSessionEvents()}
+            if voiceEventScope != scope {voiceEventScope=scope;voice.resetScope();inputCommands.resetScope()}
+            inputCommands.strict=body["inputCommands"] as? Int==1
+            if let uptime=body["uptimeMs"] as? Double {inputCommands.observe(milliseconds:uptime,now:ProcessInfo.processInfo.systemUptime)}
             authenticated=true;connectIntent=false;lastSeen=Date();connectionMessage=""
             if viaBLE { bleLastSeen=Date() } else { wifiLastSeen=Date() }
             updateTransport();state.address=transport.title
@@ -473,40 +523,15 @@ final class Engine {
         }
         switch packet {
         case .ping:break
-        case .audio(let seq,let pcm):
-            guard authenticated,active,voiceMerge==nil else { return }
-            var missing=0
-            if let previous=sequence {
-                let delta=seq &- previous
-                if delta==0 || delta>128 { return }
-                missing=Int(delta)-1
-                if delta>1 { state.dropped+=Int(delta)-1;for _ in 0..<min(3,Int(delta)-1) { sink.append([Int16](repeating:0,count:1600)) } }
-            }
-            let received=Date()
-            if state.packets==voiceInitialPackets { voiceLog.info("Voice first audio ms=\(Int(received.timeIntervalSince(self.voiceStarted)*1000)) transport=\(self.transport.rawValue,privacy:.public)") }
-            else { voiceMaxGap=max(voiceMaxGap,received.timeIntervalSince(lastAudio)) }
-            sequence=seq;state.packets+=1;lastAudio=received
-            voiceLoss.record(missing:missing)
-            if viaBLE {voiceBLEPackets+=1} else {voiceWiFiPackets+=1}
-            sink.append(pcm)
+        case .audio(let sequence,let pcm):
+            guard authenticated else {return}
+            voice.acceptLegacy(sequence:sequence,pcm:pcm,now:ProcessInfo.processInfo.systemUptime)
         case .voice(let frame):
-            guard authenticated,active else {return}
-            let now=ProcessInfo.processInfo.systemUptime,before=voiceMerge?.received ?? 0
-            let admitted=voiceMerge?.accept(frame,via:viaBLE ? .bluetooth:.wifi,now:now)==true
-            requestVoiceRepair(now:now)
-            if let observed=voiceMerge?.received,observed>before {
-                if let previous=voiceObservedAt,now-previous>0.25 {
-                    voiceLog.info("Voice arrival gap_ms=\(Int((now-previous)*1000)) sequence=\(frame.sequence) via_ble=\(viaBLE) admitted=\(admitted) next=\(self.voiceMerge?.next ?? 0)")
-                }
-                voiceObservedAt=now
-            }
-            guard admitted else {return}
-            let received=Date()
-            if state.packets==voiceInitialPackets {voiceLog.info("Voice first audio ms=\(Int(received.timeIntervalSince(self.voiceStarted)*1000)) mode=merge")}
-            else {voiceMaxGap=max(voiceMaxGap,received.timeIntervalSince(lastAudio))}
-            state.packets+=1;lastAudio=received
-            if viaBLE {voiceBLEPackets+=1}else{voiceWiFiPackets+=1}
-            if ending {endVoice(immediate:false,reason:"device-ended")}
+            guard authenticated else {return}
+#if VIBE_VOICE_BENCH
+            benchRun?.received(frame)
+#endif
+            voice.accept(frame,via:viaBLE ? .bluetooth:.wifi,now:ProcessInfo.processInfo.systemUptime)
         case .event(let body):
             guard authenticated || (pairing && body["event"] as? String=="config.reply") else { return };handle(body)
         }
@@ -518,6 +543,9 @@ final class Engine {
             recentEvents.append(id);if recentEvents.count>64 { recentEvents.removeFirst() }
         }
         switch body["event"] as? String ?? "" {
+#if VIBE_VOICE_BENCH
+        case "fixture.reply":benchRun?.reply(body)
+#endif
         case "quota.reply":quotaAcceptanceReply?(body) // No front-end error state.
         case "agent.reply":
             guard let id=body["id"] as? String,agentPending.removeValue(forKey:id) != nil else { return }
@@ -541,7 +569,7 @@ final class Engine {
                 radioProgressAt=Date();radioTickAt=Date();radioMaxTickGap=0
                 let playback=RadioPlayback(session:session,url:url,format:format) { [weak self] in self?.work.async { [weak self] in self?.flushRadioPlayback() } };radioPlayback=playback
                 let clock=DispatchSource.makeTimerSource(queue:work)
-                clock.schedule(deadline:.now(),repeating:.milliseconds(20),leeway:.milliseconds(3))
+                clock.schedule(deadline:.now(),repeating:.milliseconds(VoicePolicy.tickMilliseconds),leeway:.milliseconds(3))
                 clock.setEventHandler{ [weak self] in
                     guard let self=self,!self.powerSuspended else{return};let now=Date()
                     self.radioMaxTickGap=max(self.radioMaxTickGap,now.timeIntervalSince(self.radioTickAt));self.radioTickAt=now
@@ -556,54 +584,26 @@ final class Engine {
         case "radio.close":
             if body["session"] as? String==radioPlayback?.session { stopRadioPlayback() }
         case "voice.start":
-            let session:UInt64?
-            if body["voiceVersion"] != nil {
-                guard let value=VoiceSessionEvents.session(body),let id=body["eid"] as? Int,voiceEvents.accept(id:id) else {return}
-                session=value
-                if active {endVoice(immediate:true,reason:"new-session")}
-            } else {session=nil}
-            stopWeather();stopRadioPlayback()
-            if active && ending { endVoice(immediate:true) }
-            guard authenticated,!token.isEmpty,!active else { return }
-            do {
-                try sink.start()
-                guard !powerSuspended,try keyboard.start(shortcut) else {sink.stop();return}
-                _=voiceEnter.take(allowed:false)
-                active=true;ending=false;voiceTailDeadline=nil;generation+=1;sequence=nil;lastAudio=Date();lastKey=Date();state.error=""
-                voiceStarted=Date();voiceInitialPackets=state.packets;voiceInitialDropped=state.dropped;voiceMaxGap=0
-                voiceWiFiPackets=0;voiceBLEPackets=0
-                voiceObservedAt=nil
-                voiceActivity=ProcessInfo.processInfo.beginActivity(options:Self.voiceActivityOptions,reason:"Streaming microphone audio to the input method")
-                voiceRepair=nil
-                if let session {
-                    let value=body["voiceRepair"] as? Int ?? 0
-                    let history=(2...4).contains(value) ? value:0
-                    let links=body["voiceLinks"] as? Int
-                    let bleOnly=history>0 && (links.map{$0==2} ?? (Date().timeIntervalSince(wifiLastSeen)>=ConnectionTiming.linkFresh))
-                    voiceMerge=VoiceMerge(session:session,repairHistory:history,prefill:bleOnly ? VoiceMerge.bleRepairPrefill:nil)
-                    if history>0 {
-                        voiceRepair=VoiceRepairTracker(started:ProcessInfo.processInfo.systemUptime,history:history)
-                    }
-                    startVoiceClock()
-                }
-                voiceLoss.reset(now:voiceStarted)
-                voiceLog.info("Voice started transport=\(self.transport.rawValue,privacy:.public)")
+            guard authenticated,!token.isEmpty,!paused,!powerSuspended else {return}
+            _=voice.start(body,shortcut:shortcut,now:ProcessInfo.processInfo.systemUptime)
+        case "voice.stats":
+#if VIBE_VOICE_BENCH
+            benchRun?.diagnostics(body)
+#endif
+            if let radio=body["radio"] as? [Int],radio.count==16,let net=body["net"] as? [Int],net.count==4 {
+                let radioText=radio.map{String($0)}.joined(separator:","),netText=net.map{String($0)}.joined(separator:",")
+                voiceLog.notice("Device transport radio=[\(radioText,privacy:.public)] net=[\(netText,privacy:.public)] session=\(body["voiceSession"] as? String ?? "",privacy:.public)")
             }
-            catch { sink.stop();keyboard.stop();state.error=powerSuspended ? "" : error.localizedDescription }
+            if let tx=body["tx"] as? [Int],tx.count==10,let session=VoiceSessionEvents.session(body) {
+                voiceLog.notice("Device voice frames=\(body["frames"] as? Int ?? -1) duration_ms=\(body["captureMs"] as? Int ?? -1) capture_gap_ms=\(body["captureGapMs"] as? Int ?? -1) send_gap_ms=\(body["sendGapMs"] as? Int ?? -1) stop=\(body["stop"] as? Int ?? -1) wifi_sent=\(tx[0]) ble_sent=\(tx[1]) tx_failed=\(tx[2]) replaced=\(tx[3]) expired=\(tx[4]) repaired=\(tx[5]) ble_pressure=\(tx[6]) pool_total=\(tx[7]) pool_selected=\(tx[8]) ble_result=\(tx[9]) session=\(String(format:"%016llx",session),privacy:.public)")
+            }
         case "voice.end":
-            if body["voiceVersion"] != nil {
-                guard let session=VoiceSessionEvents.session(body),let id=body["eid"] as? Int,
-                      let frames=body["frames"] as? Double,frames>=0,frames<=Double(VoiceFrame.maxFrames),frames.rounded()==frames,
-                      voiceEvents.accept(id:id) else {return}
-                guard voiceMerge?.session==session else {return}
-                voiceMerge?.finish(frames:UInt32(frames))
-                requestVoiceRepair(now:ProcessInfo.processInfo.systemUptime)
-            } else if voiceMerge != nil {return}
-            endVoice(immediate:false,reason:"device-ended")
+            if let session=VoiceSessionEvents.session(body),session==voice.identity?.session,
+               let at=body["atMs"] as? Double {inputCommands.observe(milliseconds:at,now:ProcessInfo.processInfo.systemUptime)}
+            voice.end(body,now:ProcessInfo.processInfo.systemUptime)
         case "key.action":
-            voiceLog.info("Key action received authenticated=\(self.authenticated) active=\(self.active) permitted=\(Shortcut.permitted)")
-            if authenticated,!token.isEmpty,body["action"] as? String=="enter",
-               voiceEnter.receive(recording:active,ending:ending) {keyboard.enter()}
+            guard authenticated,!token.isEmpty,!paused,!powerSuspended else {return}
+            inputCommands.receive(body,now:ProcessInfo.processInfo.systemUptime)
         case "radio.verified":
             if let url=body["url"] as? String { DispatchQueue.main.async { self.onRadioVerified?(url) } }
         case "radio.reply":
@@ -697,55 +697,63 @@ final class Engine {
         settingsRevision=(body["settingsRevision"] as? NSNumber)?.uint32Value
         let value=prefs,source=device;DispatchQueue.main.async { self.onSettings?(value,source) }
     }
-    private func requestVoiceRepair(now:TimeInterval) {
-        guard active,!powerSuspended,authenticated,!paused,!token.isEmpty,let merge=voiceMerge else{return}
-        guard let frames=voiceRepair?.request(merge,now:now),!frames.isEmpty else{return}
-        if !sendOnAvailableLinks(["type":"voice.repair","token":token,"voiceSession":String(format:"%016llx",merge.session),"frames":frames.map{Int($0)}]) {
-            voiceRepair?.submissionFailed(frames,now:now)
+    private func makeVoiceSession()->VoiceSession {
+        let value=VoiceSession(output:output,shortcut:keyboard)
+        value.beforeStart={ [weak self] in self?.stopWeather();self?.stopRadioPlayback() }
+        value.send={ [weak self] body in
+            guard let self,self.authenticated,!self.paused,!self.powerSuspended else {return false}
+            var command=body;command["token"]=self.token
+            return self.sendOnAvailableLinks(command,voice:true)
         }
-    }
-    private func startVoiceClock() {
-        voiceClock?.cancel()
-        let clock=DispatchSource.makeTimerSource(queue:work)
-        clock.schedule(deadline:.now(),repeating:.milliseconds(20),leeway:.milliseconds(3))
-        clock.setEventHandler { [weak self] in
-            guard let self=self,!self.powerSuspended,self.active else {return}
-            let before=self.voiceMerge?.missing ?? 0
-            self.requestVoiceRepair(now:ProcessInfo.processInfo.systemUptime)
-            guard let frames=self.voiceMerge?.drain(now:ProcessInfo.processInfo.systemUptime) else {return}
-            self.state.dropped+=(self.voiceMerge?.missing ?? 0)-before
-            for frame in frames {
-                switch frame {
-                case .audio(let frame,_):if let pcm=VoiceCodec.decode(frame.block) {self.sink.append(pcm)}
-                case .silence:self.sink.append([Int16](repeating:0,count:1600))
-                }
+        value.sendRepair={ [weak self] body,completion in
+            guard let self else {completion(.notSubmitted,ProcessInfo.processInfo.systemUptime);return}
+            self.sendVoiceRepair(body,completion:completion)
+        }
+        value.sendFeedback={ [weak self] feedback in
+            guard let self,self.authenticated,!self.paused,!self.powerSuspended,
+                  let packet=feedback.packet(token:self.token) else{return false}
+            var submitted=false
+            if let found=self.discovery.devices[self.device],found.hasWiFi,self.socketFD>=0 {
+                submitted=LANSocket.send(packet,from:self.socketFD,to:found.endpoint)
             }
+            if self.bluetooth?.isActive==true,self.bluetooth?.send(packet,voice:true)==true {submitted=true}
+            return submitted
         }
-        voiceClock=clock;clock.resume()
+        value.onProgress={ [weak self] packets,dropped in
+            self?.state.packets+=packets;self?.state.dropped+=dropped
+        }
+        value.onStarted={ [weak self] identity in
+            guard let self else {return}
+            self.state.error="";self.inputCommands.voiceStarted(identity)
+#if VIBE_VOICE_BENCH
+            self.benchRun?.voiceBegan(identity)
+#endif
+            self.startVoiceTimer()
+        }
+        value.onFinished={ [weak self] result in
+            guard let self else {return}
+            self.voiceTimer?.cancel();self.voiceTimer=nil
+            self.bluetooth?.discardVoiceRepair()
+            self.inputCommands.voiceFinished(result,now:ProcessInfo.processInfo.systemUptime)
+#if VIBE_VOICE_BENCH
+            self.benchRun?.ended(result)
+#endif
+            self.publish()
+        }
+        value.onError={ [weak self] message in self?.state.error=message }
+        value.log={ [weak self] message in self?.voiceLog.notice("\(message,privacy:.public)") }
+        return value
     }
-    private func endVoice(immediate:Bool,reason:String="session-ended") {
-        guard active else { return }
-        let now=ProcessInfo.processInfo.systemUptime
-        if !ending {voiceTailDeadline=now+1}
-        ending=true
-        generation+=1;let expected=generation
-        let stop={ [self] in
-            guard generation==expected else { return }
-            if let activity=voiceActivity {ProcessInfo.processInfo.endActivity(activity);voiceActivity=nil}
-            keyboard.stop();sink.stop();active=false;ending=false;sequence=nil
-            let allowEnter=(reason=="device-ended" || reason=="new-session") && authenticated && !paused && !powerSuspended && Shortcut.permitted
-            for _ in 0..<voiceEnter.take(allowed:allowEnter) {keyboard.enter()}
-            voiceClock?.cancel();voiceClock=nil
-            if let merge=voiceMerge {
-                voiceLog.info("Voice merge accepted=\(merge.accepted) received=\(merge.received) duplicate=\(merge.duplicates) late=\(merge.late) late_first=\(merge.lateFirst) recovered=\(merge.recovered) missing=\(merge.missing) resync=\(merge.resyncs) wifi_copies=\(merge.wifiCopies) ble_copies=\(merge.bleCopies) rescued=\(merge.rescued) extra_delay_ms=\(Int(merge.extraDelay*1000))")
-            }
-            if let repair=voiceRepair {voiceLog.info("Voice repair requests=\(repair.sent) local_rejected=\(repair.rejected)")}
-            voiceRepair=nil;voiceMerge=nil;voiceTailDeadline=nil;voiceObservedAt=nil
-            voiceLog.info("Voice stopped packets=\(self.state.packets-self.voiceInitialPackets) dropped=\(self.state.dropped-self.voiceInitialDropped) max_gap_ms=\(Int(self.voiceMaxGap*1000)) immediate=\(immediate) reason=\(reason,privacy:.public) wifi_packets=\(self.voiceWiFiPackets) ble_packets=\(self.voiceBLEPackets) silence_ms=\(Int(Date().timeIntervalSince(self.lastAudio)*1000))")
-            publish()
+
+    private func startVoiceTimer() {
+        voiceTimer?.cancel()
+        let timer=DispatchSource.makeTimerSource(queue:work)
+        timer.schedule(deadline:.now(),repeating:.milliseconds(VoicePolicy.tickMilliseconds),leeway:.milliseconds(3))
+        timer.setEventHandler { [weak self] in
+            guard let self,!self.powerSuspended else {return}
+            self.voice.tick(now:ProcessInfo.processInfo.systemUptime,permitted:self.inputPermitted)
         }
-        let grace=min(voiceMerge?.tailDelay(now:now) ?? 0.18,max(0,(voiceTailDeadline ?? now)-now))
-        if immediate { stop() } else { work.asyncAfter(deadline:.now()+grace,execute:stop) }
+        voiceTimer=timer;timer.resume()
     }
     private func request(_ type:String,extra:[String:Any]) {
         let id=UUID().uuidString
@@ -789,7 +797,7 @@ final class Engine {
     }
     func setShortcut(_ spec:String) throws {
         _=try Shortcut.resolve(spec);UserDefaults.standard.set(spec,forKey:"shortcut")
-        work.async { self.endVoice(immediate:true);self.shortcut=spec }
+        work.async { self.voice.cancel(reason:"shortcut-changed");self.inputCommands.cancel(now:ProcessInfo.processInfo.systemUptime);self.shortcut=spec }
     }
     private func disconnect(_ message:String) {
         transportPolicy.reset()
@@ -799,75 +807,41 @@ final class Engine {
         cancelRadio(message)
         let interrupted = !pending.isEmpty
         pending.removeAll();peer=nil;state.address="";lastSeen = .distantPast;lastBeacon = .distantPast
-        settingsRevision=nil;bootID=nil;recentEvents.removeAll();endVoice(immediate:true)
+        settingsRevision=nil;bootID=nil;recentEvents.removeAll()
+        voice.cancel(reason:"disconnected");inputCommands.cancel(now:ProcessInfo.processInfo.systemUptime)
+        voiceTimer?.cancel();voiceTimer=nil
         if interrupted { DispatchQueue.main.async { self.onResult?(false,message) } }
     }
     static func testVoiceMerge(_ check:(Bool,String)->Void) {
-        check(!voiceActivityOptions.contains(.idleSystemSleepDisabled) && !voiceActivityOptions.contains(.idleDisplaySleepDisabled),"voice precision does not prevent system or display sleep")
-        let engine=Engine(preview:true)
+        VoiceSessionTests.run(check)
+        var keys:[UInt16]=[]
+        let keyboard=Shortcut(permissionCheck:{true},eventSink:{code,down,_ in if down {keys.append(code)}})
+        let engine=Engine(preview:true,keyboard:keyboard,output:TestVoiceOutput())
         engine.work.sync {
-            engine.device="aabbccddeeff";engine.authenticated=true;engine.active=true
-            var lan=sockaddr_in();lan.sin_family=sa_family_t(AF_INET);lan.sin_port=LANSocket.discoveryPort.bigEndian;lan.sin_addr.s_addr=inet_addr("192.0.2.20")
-            _=engine.discovery.accept(["event":"device.hello","device":engine.device,"paired":true],from:lan)
-            engine.voiceMerge=VoiceMerge(session:1)
-            var wire=Data([6,1,0,0,0,0,0,0,0,0,0,0,0]);wire.append(Data(repeating:0,count:804))
-            engine.processPacket(wire,from:lan,viaBLE:false)
+            engine.device="aabbccddeeff";engine.authenticated=true;engine.token=String(repeating:"a",count:64)
+            var endpoint=Self.bleEndpoint
+            endpoint.sin_addr.s_addr=inet_addr("192.0.2.20")
+            _=engine.discovery.accept(["event":"device.hello","device":engine.device,"paired":true],from:endpoint)
+            let now=ProcessInfo.processInfo.systemUptime
+            engine.inputCommands.observe(milliseconds:now*1000,now:now)
+            engine.handle(["event":"voice.start","voiceVersion":2,"voiceSession":"0000000000000001", "voiceRequest":1,"eid":1])
+            var wire=Data([6,1,0,0,0,0,0,0,0,0,0,0,0])
+            wire.append(Data(repeating:0,count:804))
+            engine.processPacket(wire,from:endpoint,viaBLE:false)
             engine.processPacket(wire,from:Self.bleEndpoint,viaBLE:true)
-            check(engine.state.packets==1 && engine.voiceMerge?.duplicates==1,"engine merges both authorized attachments before playback")
-            let fresh=engine.lastAudio;wire[1]=2
-            engine.processPacket(wire,from:lan,viaBLE:false)
-            check(engine.state.packets==1 && engine.lastAudio==fresh,"old session cannot refresh fresh-audio watchdog")
-            var legacy=Data([1,9,0x80]);legacy.append(Data(repeating:0,count:804))
-            engine.processPacket(legacy,from:lan,viaBLE:false)
-            check(engine.state.packets==1,"legacy audio cannot leak into a V2 recording")
-            engine.handle(["event":"voice.end","voiceVersion":2,"voiceSession":"0000000000000002","frames":1.0,"eid":2])
-            check(engine.active && !engine.ending,"old session end cannot stop current input")
-            engine.handle(["event":"voice.end","voiceVersion":2,"voiceSession":"0000000000000001","frames":2.0,"eid":3])
-            let limit=engine.voiceTailDeadline
-            wire[1]=1;wire[9]=1;engine.processPacket(wire,from:lan,viaBLE:false)
-            check(engine.ending && engine.voiceTailDeadline==limit,"late final audio can extend drain without moving its hard limit")
-            engine.token=String(repeating:"a",count:64)
-            engine.handle(["event":"key.action","action":"enter","eid":4])
-            engine.handle(["event":"key.action","action":"enter","eid":4])
-            engine.handle(["event":"key.action","action":"enter","eid":5])
-            check(engine.voiceEnter.pending==2,"two distinct Enter events queue during tail; mirrored copies do not duplicate")
-            engine.voiceRepair=VoiceRepairTracker(started:0,history:4)
-            engine.startVoiceClock();check(engine.voiceClock != nil,"active merge owns its playout timer")
-            engine.voiceActivity=ProcessInfo.processInfo.beginActivity(options:voiceActivityOptions,reason:"Testing scoped voice timing")
-            engine.endVoice(immediate:true,reason:"test-disconnect")
-            check(!engine.active && engine.voiceMerge==nil && engine.voiceRepair==nil && engine.voiceClock==nil && engine.voiceTailDeadline==nil && engine.voiceEnter.pending==0 && engine.voiceActivity==nil,"disconnect releases merge timer, repair tracker, audio, timing activity and queued Enter immediately")
-            wire[1]=1;engine.processPacket(wire,from:lan,viaBLE:false)
-            check(!engine.active && engine.voiceMerge==nil,"late audio cannot automatically restart input")
+            check(engine.state.packets==1,"authenticated Engine routes two carriers through one voice admission")
+            wire[1]=2;engine.processPacket(wire,from:endpoint,viaBLE:false)
+            check(engine.state.packets==1,"old session cannot enter current playback through Engine routing")
+            engine.handle(["event":"voice.end","voiceVersion":2,"voiceSession":"0000000000000001","frames":1.0,"eid":2])
+            engine.voice.tick(now:now+VoicePolicy.prefill+0.1)
+            check(!engine.active && engine.voiceTimer==nil && !keys.contains(36),"Engine voice completion releases its timer and cannot inject Enter")
+            let at=ProcessInfo.processInfo.systemUptime
+            let command:[String:Any]=["event":"key.action","action":"enter","inputVersion":1,"command":1,
+                "voiceRequest":1,"pressedAtMs":(at-0.06)*1000,"atMs":at*1000,"eid":3]
+            for _ in 0..<6 {engine.handle(command)}
+            check(keys.filter{$0==36}.count==1,"Engine dispatches one explicit Enter despite mirrored control retries")
+            engine.disconnect("test complete")
         }
-        do {
-            let receiver=try LANSocket.open(),sender=try LANSocket.open()
-            defer {Darwin.close(receiver.descriptor);Darwin.close(sender.descriptor)}
-            let repair=Engine(preview:true)
-            repair.device="aabbccddeeff";repair.clientID="11111111-1111-1111-1111-111111111111"
-            repair.token=String(repeating:"a",count:64);repair.authenticated=true;repair.active=true
-            var endpoint=Self.bleEndpoint;endpoint.sin_port=receiver.port.bigEndian
-            _=repair.discovery.accept(["event":"device.hello","device":repair.device,"paired":true],from:endpoint)
-            repair.peer=endpoint;repair.socketFD=sender.descriptor
-            repair.voiceMerge=VoiceMerge(session:1,repairHistory:4)
-            _=repair.voiceMerge?.accept(VoiceFrame(session:1,sequence:1,block:Data(repeating:0,count:804)),via:.wifi,now:0)
-            repair.voiceRepair=VoiceRepairTracker(started:0,history:4);repair.requestVoiceRepair(now:0.01)
-            var bytes=[UInt8](repeating:0,count:2048)
-            var count=Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)
-            let receiveDeadline=Date().addingTimeInterval(0.2)
-            while count<0,Date()<receiveDeadline {usleep(1000);count=Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)}
-            let body=count>1 ? (try? JSONSerialization.jsonObject(with:Data(bytes[1..<count]))) as? [String:Any]:nil
-            if body?["type"] as? String != "voice.repair" {
-                fputs("Repair test diagnostics: bytes=\(count) requests=\(repair.voiceRepair?.sent ?? -1) candidates=\(repair.voiceMerge?.repairCandidates(now:0.01,started:0,history:4) ?? []) wifi=\(repair.discovery.devices[repair.device]?.hasWiFi ?? false) errno=\(errno)\n",stderr)
-            }
-            check(body?["type"] as? String=="voice.repair" && body?["voiceSession"] as? String=="0000000000000001" &&
-                  body?["frames"] as? [Int]==[0] && body?["token"] as? String==repair.token && body?["client"] as? String==repair.clientID,
-                  "real UDP repair request carries the exact session, missing sequence and existing authorization")
-            repair.requestVoiceRepair(now:0.02)
-            check(Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)<0,"request rate limit applies to the real send path")
-            repair.lifecycle.suspend();repair.requestVoiceRepair(now:0.2)
-            check(Darwin.recv(receiver.descriptor,&bytes,bytes.count,0)<0,"sleep cannot emit queued repair traffic")
-            repair.endVoice(immediate:true,reason:"test-finished");repair.socketFD = -1
-        } catch {check(false,"voice repair UDP integration: \(error.localizedDescription)")}
     }
     static func testConnections(_ check:(Bool,String)->Void) {
         let engine=Engine(preview:true)
@@ -1009,7 +983,31 @@ final class Engine {
             check(radio.radioPlayback==nil && radio.radioActivity==nil,"unsupported format cannot create a decoder or timing activity")
         }
     }
+    private static func testSocketLifetime(_ check:(Bool,String)->Void) {
+        let engine=Engine(preview:true),cancelled=DispatchSemaphore(value:0)
+        var previous:Int32 = -1,replacement:Int32 = -1
+        engine.work.sync {
+            let old=try! LANSocket.open();previous=old.descriptor
+            let source=DispatchSource.makeReadSource(fileDescriptor:previous,queue:engine.work)
+            source.setEventHandler {}
+            source.setCancelHandler {Darwin.close(old.descriptor);cancelled.signal()}
+            source.resume();engine.reader=source;engine.socketFD=previous
+            engine.stopNow()
+            check(engine.reader==nil && engine.socketFD<0,"stop revokes socket admission immediately")
+            check(fcntl(previous,F_GETFD)>=0,"Dispatch retains its registered descriptor until cancellation completes")
+            replacement=try! LANSocket.open().descriptor
+            check(replacement != previous,"restart cannot reuse a still-registered descriptor")
+        }
+        defer {Darwin.close(replacement)}
+        check(cancelled.wait(timeout:.now()+5) == .success,"the original cancel handler completes exactly once")
+        check(fcntl(previous,F_GETFD)<0 && fcntl(replacement,F_GETFD)>=0,"cancellation closes only its own socket")
+        check(dup2(replacement,previous)==previous,"force descriptor reuse after cancellation")
+        defer {Darwin.close(previous)}
+        engine.stop()
+        check(fcntl(previous,F_GETFD)>=0 && fcntl(replacement,F_GETFD)>=0,"repeated cleanup cannot close a reused descriptor")
+    }
     static func testSleepLifecycle(_ check:(Bool,String)->Void) {
+        testSocketLifetime(check)
         let backlog=Engine(preview:true),entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
         backlog.work.async {entered.signal();_=release.wait(timeout:.now()+5)}
         check(entered.wait(timeout:.now()+5) == .success,"create a stalled worker before system sleep")
@@ -1048,7 +1046,7 @@ final class Engine {
             check(engine.lastDiscovery==discoveryAt,"a queued timer callback cannot perform discovery after sleep")
             check(engine.powerSuspended && !engine.running && engine.bluetooth==nil && engine.timer==nil && engine.socketFD<0,"late startup and retry requests cannot restart a sleeping engine")
             check(engine.device=="aabbccddeeff" && engine.token==String(repeating:"a",count:64) && !engine.paused,"sleep retains authorization and the user's reconnect preference")
-            check(engine.radioClock==nil && engine.radioActivity==nil && !engine.active && !engine.sink.running,"sleep releases audio timing, playback and keyboard capture")
+            check(engine.radioClock==nil && engine.radioActivity==nil && !engine.active && !engine.output.running,"sleep releases audio timing, playback and keyboard capture")
             check(!engine.state.connected && !engine.state.recording,"sleep cleanup removes stale Connected/Recording UI state")
         }
         var bytes=[UInt8](repeating:0,count:2048)
@@ -1084,6 +1082,9 @@ final class Engine {
         else {work.sync {stopNow()}}
     }
     private func stopNow(completion:(()->Void)?=nil) {
+#if VIBE_VOICE_BENCH
+        benchRun?.cancel()
+#endif
         tearingDown=true;defer{tearingDown=false}
         running=false
         audioProbeGeneration+=1;audioProbeBusy=false;audioAvailable=false;lastAudioProbe = .distantPast
@@ -1094,17 +1095,14 @@ final class Engine {
         bluetooth?.shutdown();bluetooth=nil
         timer?.cancel();timer=nil;socketGeneration+=1
         if let reader=reader {
-            let fd=socketFD
-            // Reader callbacks share this serial queue. Invalidate their
-            // generation first, then close here; the old cancel handler must
-            // not later close an unrelated descriptor that reused this number.
-            reader.setCancelHandler {}
+            // Invalidate callbacks immediately, but let the original cancel
+            // handler be the sole descriptor owner. Closing before Dispatch
+            // removes its read registration can race a reused descriptor.
             reader.cancel()
-            if fd>=0 {Darwin.close(fd)}
         }
         reader=nil;socketFD = -1;localPort=0
         disconnect("连接已结束，未确认的修改请重新读取")
-        keyboard.stop();sink.stop()
+        keyboard.stop();output.stop()
         publish()
         if let completion=completion {DispatchQueue.main.async(execute:completion)}
     }

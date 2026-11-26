@@ -3,6 +3,38 @@
 #include <string.h>
 
 typedef enum { V_INPUT_PASS,V_INPUT_CONSUMED,V_INPUT_ACCEPT,V_INPUT_REJECT } vibe_input_result_t;
+/* Enter is an explicit, independently identified DOWN press/release command.
+ * No voice lifecycle event can synthesize it. Times are captured at the input
+ * callback, not reconstructed after a busy application queue drains. */
+typedef struct {
+    bool up,down,armed,released_up;
+    uint64_t up_release,down_at;
+    unsigned hold_ms,gap_ms;
+    uint32_t command,voice_request,owner;
+} vibe_enter_intent_t;
+static inline void vibe_enter_intent_reset(vibe_enter_intent_t *s) {
+    uint32_t command=s->command;
+    *s=(vibe_enter_intent_t){.command=command};
+}
+static inline bool vibe_enter_intent_event(vibe_enter_intent_t *s,vibe_key_t key,vibe_event_t event,uint64_t now) {
+    if (key==V_UP) {
+        if(event==V_PRESS){s->up=true;s->armed=false;}
+        else if(event==V_RELEASE){s->up=false;s->released_up=true;s->up_release=now;}
+    } else if (key==V_DOWN) {
+        if(event==V_PRESS) {
+            if(s->down){s->armed=false;return false;}
+            s->down=true;s->down_at=now;
+            if (++s->command==0) ++s->command;
+            s->gap_ms=s->released_up && now>=s->up_release ? (unsigned)(now-s->up_release):0;
+            s->armed=!s->up;
+        } else if(event==V_RELEASE) {
+            s->hold_ms=now>=s->down_at?(unsigned)(now-s->down_at):0;
+            bool allowed=s->down && s->armed && !s->up && now>s->down_at;
+            s->down=false;s->armed=false;return allowed;
+        }
+    } else if(key==V_SETTINGS && event==V_PRESS) s->armed=false;
+    return false;
+}
 typedef struct {
     char request[37];
     uint32_t frame;

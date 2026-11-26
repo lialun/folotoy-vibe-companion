@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "transport": "dual",
+  "stages": [
+    {"name": "dual-smoke", "mask": 3, "seconds": 10},
+    {"name": "ble-media", "mask": 2, "seconds": 10},
+    {"name": "wifi-media", "mask": 1, "seconds": 10}
+  ]
+}

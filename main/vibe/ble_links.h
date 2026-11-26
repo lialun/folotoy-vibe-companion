@@ -4,7 +4,9 @@
 #include "ble_parameters.h"
 #define VIBE_BLE_LINK_SLOTS 2
 #define VIBE_BLE_NO_HANDLE UINT16_MAX
-typedef struct { uint16_t handle;uint32_t generation;bool subscribed;vibe_ble_frame_t incoming;vibe_ble_media_t media;vibe_ble_parameters_t parameters; } vibe_ble_link_t;
+typedef struct { uint16_t handle;uint32_t generation;bool subscribed;vibe_ble_frame_t incoming;vibe_ble_media_t media;vibe_ble_parameters_t parameters;
+    uint16_t tx_octets,tx_time;uint8_t tx_phy,rx_phy;
+} vibe_ble_link_t;
 typedef struct { vibe_ble_link_t links[VIBE_BLE_LINK_SLOTS];uint32_t generation; } vibe_ble_links_t;
 static inline void vibe_ble_links_init(vibe_ble_links_t *s) {
     memset(s,0,sizeof(*s));for (unsigned i=0;i<VIBE_BLE_LINK_SLOTS;i++) s->links[i].handle=VIBE_BLE_NO_HANDLE;

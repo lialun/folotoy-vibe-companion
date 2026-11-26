@@ -34,8 +34,12 @@ static uint16_t tx_handle;
 static SemaphoreHandle_t tx_mutex;
 static uint8_t address_type,message_id;
 static atomic_bool ready;
+static atomic_bool streaming;
+static atomic_bool radio_ingress;
+static struct ble_npl_event radio_clear_event;
 static bool advertising_connectable;
 static struct ble_npl_callout parameter_callout;
+static struct ble_npl_event streaming_event;
 void ble_store_config_init(void);
 static void advertise(void);
 void vibe_ble_publish_metadata(const char *text,size_t length) {
@@ -70,6 +74,7 @@ static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ct
     if (!link) return BLE_ATT_ERR_UNLIKELY;
     uint64_t now=vibe_now();vibe_ble_media_expire(&link->media,now);
     if(n>7 && (frame[2]&4)) {
+        if (!atomic_load(&radio_ingress)) {vibe_ble_media_clear(&link->media);return 0;}
         vibe_ble_frame_t *media=vibe_ble_media_feed(&link->media,frame,n,now);
         if(media) {vibe_receive_ble(conn,link->generation,media->bytes,media->used);vibe_ble_media_clear(&link->media);}
     } else if (vibe_ble_frame_feed(&link->incoming,frame,n,now)) vibe_receive_ble(conn,link->generation,link->incoming.bytes,link->incoming.used);
@@ -97,13 +102,40 @@ static void parameter_update_event(struct ble_npl_event *event) {
         ble_link_t *link=&links[i];struct ble_gap_conn_desc desc;
         if(link->handle==BLE_HS_CONN_HANDLE_NONE || !link->parameters.due) continue;
         if(ble_gap_conn_find(link->handle,&desc)) {link->parameters.due=0;continue;}
-        if(desc.supervision_timeout>=VIBE_BLE_MIN_SUPERVISION) {vibe_ble_parameters_observe(&link->parameters,now,desc.supervision_timeout);continue;}
-        if(!vibe_ble_parameters_due(&link->parameters,now)) continue;
-        struct ble_gap_upd_params params={.itvl_min=12,.itvl_max=24,.latency=0,.supervision_timeout=VIBE_BLE_SUPERVISION};
+        uint8_t tx_phy=0,rx_phy=0;
+        if(!ble_gap_read_le_phy(link->handle,&tx_phy,&rx_phy)) {
+            xSemaphoreTake(links_mutex,portMAX_DELAY);link->tx_phy=tx_phy;link->rx_phy=rx_phy;xSemaphoreGive(links_mutex);
+        }
+        if(!vibe_ble_parameters_due(&link->parameters,now,desc.conn_itvl,desc.supervision_timeout)) continue;
+        bool active=link->parameters.streaming;
+        struct ble_gap_upd_params params={
+            .itvl_min=active?VIBE_BLE_STREAM_INTERVAL:VIBE_BLE_IDLE_MIN_INTERVAL,
+            .itvl_max=active?VIBE_BLE_STREAM_INTERVAL:VIBE_BLE_IDLE_MAX_INTERVAL,
+            .latency=0,.supervision_timeout=VIBE_BLE_SUPERVISION};
         int result=ble_gap_update_params(link->handle,&params);
-        if(result) {vibe_ble_parameters_observe(&link->parameters,now,desc.supervision_timeout);ESP_LOGW("vibe_ble","Parameter request deferred: result=%d attempt=%u",result,link->parameters.attempts);}
+        if(result) {vibe_ble_parameters_observe(&link->parameters,now,result,desc.supervision_timeout);ESP_LOGW("vibe_ble","Parameter request deferred: result=%d attempt=%u",result,link->parameters.attempts);}
     }
     parameter_schedule();
+}
+static void streaming_update_event(struct ble_npl_event *event) {
+    (void)event;if(!ready)return;
+    bool active=atomic_load(&streaming);uint64_t now=vibe_now();
+    for(unsigned i=0;i<LINK_SLOTS;i++)if(links[i].handle!=BLE_HS_CONN_HANDLE_NONE)
+        vibe_ble_parameters_stream(&links[i].parameters,now,active);
+    parameter_schedule();
+}
+static void radio_clear(struct ble_npl_event *event) {
+    (void)event;
+    if (!atomic_load(&radio_ingress))
+        for (unsigned i=0;i<LINK_SLOTS;i++) vibe_ble_media_clear(&links[i].media);
+}
+void vibe_ble_radio_ingress(bool enabled) {
+    atomic_store(&radio_ingress,enabled);
+    if (!enabled && ready) ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&radio_clear_event);
+}
+void vibe_ble_streaming(bool active) {
+    if(atomic_exchange(&streaming,active)==active || !ready)return;
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&streaming_event);
 }
 static int gap_event(struct ble_gap_event *event,void *arg) {
     (void)arg;
@@ -117,7 +149,10 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
             (void)vibe_ble_link_ensure(&registry,handle);
             xSemaphoreGive(links_mutex);
             ble_link_t *link=find_link(handle);
-            if(link) vibe_ble_parameters_start(&link->parameters,vibe_now());
+            if(link) {
+                uint64_t now=vibe_now();vibe_ble_parameters_start(&link->parameters,now);
+                vibe_ble_parameters_stream(&link->parameters,now,atomic_load(&streaming));
+            }
             parameter_schedule();
             /* Keep the initial PHY/DLE procedures with the stack. Starting
              * another PHY procedure here collided with parameter negotiation. */
@@ -136,10 +171,22 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
     case BLE_GAP_EVENT_CONN_UPDATE: {
         ble_link_t *link=find_link(event->conn_update.conn_handle);struct ble_gap_conn_desc desc;
         if(link && !ble_gap_conn_find(link->handle,&desc)) {
-            vibe_ble_parameters_observe(&link->parameters,vibe_now(),desc.supervision_timeout);
+            vibe_ble_parameters_observe(&link->parameters,vibe_now(),event->conn_update.status,desc.supervision_timeout);
             ESP_LOGI("vibe_ble","Connection parameters: status=%d interval=%u timeout=%u attempt=%u",event->conn_update.status,desc.conn_itvl,desc.supervision_timeout,link->parameters.attempts);
         }
         parameter_schedule();break;
+    }
+    case BLE_GAP_EVENT_DATA_LEN_CHG: {
+        xSemaphoreTake(links_mutex,portMAX_DELAY);
+        ble_link_t *link=find_link(event->data_len_chg.conn_handle);
+        if(link){link->tx_octets=event->data_len_chg.max_tx_octets;link->tx_time=event->data_len_chg.max_tx_time;}
+        xSemaphoreGive(links_mutex);break;
+    }
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE: {
+        xSemaphoreTake(links_mutex,portMAX_DELAY);
+        ble_link_t *link=find_link(event->phy_updated.conn_handle);
+        if(link && !event->phy_updated.status){link->tx_phy=event->phy_updated.tx_phy;link->rx_phy=event->phy_updated.rx_phy;}
+        xSemaphoreGive(links_mutex);break;
     }
     case BLE_GAP_EVENT_ENC_CHANGE:
         ESP_LOGI("vibe_ble","Encryption handle=%u status=%d secure=%d",(unsigned)event->enc_change.conn_handle,event->enc_change.status,secure(event->enc_change.conn_handle));break;
@@ -210,6 +257,8 @@ esp_err_t vibe_ble_init(void) {
     if (count>0) vibe_ble_publish_metadata(initial,count);
     esp_err_t error=nimble_port_init();if (error!=ESP_OK) return error;
     ble_npl_callout_init(&parameter_callout,nimble_port_get_dflt_eventq(),parameter_update_event,NULL);
+    ble_npl_event_init(&streaming_event,streaming_update_event,NULL);
+    ble_npl_event_init(&radio_clear_event,radio_clear,NULL);
     ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_hs_cfg.store_status_cb=ble_store_util_status_rr;
     ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;ble_hs_cfg.sm_mitm=0;ble_hs_cfg.sm_sc=1;ble_hs_cfg.sm_bonding=1;
     ble_hs_cfg.sm_our_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
@@ -219,62 +268,13 @@ esp_err_t vibe_ble_init(void) {
     if (ble_gatts_count_cfg(services)!=0 || ble_gatts_add_svcs(services)!=0) { nimble_port_deinit();return ESP_FAIL; }
     ble_att_set_preferred_mtu(247);nimble_port_freertos_init(host_task);return ESP_OK;
 }
-int vibe_ble_send_to(uint16_t conn,unsigned char type,const void *bytes,size_t length) {
-    const bool audio=type==1 || type==6;uint64_t began=vibe_now();
-    /* Only workers call this sender. Share the existing whole-packet budget
-     * with lock acquisition; an overlapping control packet must not cause an
-     * otherwise healthy BLE-only voice frame to be discarded immediately. */
-    if (!tx_mutex || xSemaphoreTake(tx_mutex,pdMS_TO_TICKS(vibe_ble_tx_lock_ms(audio)))!=pdTRUE) return -1;
-    xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(conn);
-    bool subscribed=link && link->subscribed;xSemaphoreGive(links_mutex);
-    bool encrypted=secure(conn);
-    if (!subscribed || !encrypted || length+1>VIBE_BLE_PACKET_MAX) {
-        static unsigned dropped;
-        if (dropped++<4) ESP_LOGW("vibe_ble","TX rejected handle=%u subscribed=%d secure=%d",(unsigned)conn,subscribed,encrypted);
-        xSemaphoreGive(tx_mutex);return -1;
-    }
-    unsigned mtu=ble_att_mtu(conn),capacity=mtu>10 ? mtu-3-VIBE_BLE_HEADER : 0;
-    if (!capacity) { xSemaphoreGive(tx_mutex);return -1; }
-    if (capacity>240) capacity=240;
-    uint8_t id=++message_id,frame[247];size_t total=length+1;
-    for (size_t offset=0;offset<total;) {
-        size_t n=total-offset;if (n>capacity) n=capacity;
-        int result=BLE_HS_ENOMEM;unsigned free_total=0,min_pool=0;
-        do {
-            struct os_mbuf *buffer=ble_hs_mbuf_att_pkt();
-            free_total=(unsigned)os_msys_num_free();min_pool=UINT16_MAX;
-            if (buffer) {
-                /* ATT headroom makes a full-MTU value spill into another small
-                 * mbuf. Fit this fragment to the allocated block instead of
-                 * consuming two blocks while the other pool remains free. */
-                uint32_t critical;OS_ENTER_CRITICAL(critical);
-                min_pool=buffer->om_omp->omp_pool->mp_num_free;
-                OS_EXIT_CRITICAL(critical);
-                unsigned space=OS_MBUF_TRAILINGSPACE(buffer);
-                if (space>VIBE_BLE_HEADER && n>space-VIBE_BLE_HEADER) n=space-VIBE_BLE_HEADER;
-                frame[0]=0x56;frame[1]=id;frame[2]=(offset==0?1:0)|(offset+n==total?2:0);
-                frame[3]=total&255;frame[4]=total>>8;frame[5]=offset&255;frame[6]=offset>>8;
-                for (size_t i=0;i<n;i++) frame[VIBE_BLE_HEADER+i]=(offset+i)==0 ? type : ((const uint8_t *)bytes)[offset+i-1];
-                if (space>VIBE_BLE_HEADER && vibe_ble_tx_admit(free_total,min_pool,audio) &&
-                    os_mbuf_append(buffer,frame,n+VIBE_BLE_HEADER)==0) {
-                    result=ble_gatts_notify_custom(conn,tx_handle,buffer); /* Consumes buffer on every outcome. */
-                    if (!result || (result!=BLE_HS_ENOMEM && result!=BLE_HS_EAGAIN)) break;
-                } else os_mbuf_free_chain(buffer);
-            } else min_pool=0;
-            if (!vibe_ble_tx_wait(began,vibe_now(),audio)) break;
-            vTaskDelay(pdMS_TO_TICKS(2)?pdMS_TO_TICKS(2):1);
-        } while (vibe_ble_tx_wait(began,vibe_now(),audio));
-        if (result) {
-            static uint64_t reported;static unsigned failures;++failures;
-            uint64_t now=vibe_now();
-            if (!reported || now-reported>=5000) {
-                reported=now;ESP_LOGW("vibe_ble","TX pressure handle=%u type=%u result=%d free=%u pool=%u failures=%u heap=%u largest=%u",(unsigned)conn,type,result,free_total,min_pool,failures,(unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-            }
-            xSemaphoreGive(tx_mutex);return -1;
-        }
-        offset+=n;
-        /* The next fragment must pass the same pool admission. Wait only under
-         * pressure; imposing a per-fragment delay would hurt small-MTU peers. */
-    }
-    xSemaphoreGive(tx_mutex);return 0;
+#include "ble_sender.inc"
+void vibe_ble_voice_link(vibe_voice_counters_t *out) {
+    xSemaphoreTake(tx_mutex,portMAX_DELAY);uint16_t handle=voice_probe_handle;xSemaphoreGive(tx_mutex);
+    struct ble_gap_conn_desc desc;
+    if(handle==UINT16_MAX || ble_gap_conn_find(handle,&desc))return;
+    out->mtu=ble_att_mtu(handle);out->interval=desc.conn_itvl;
+    xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(handle);
+    if(link){out->tx_octets=link->tx_octets;out->tx_time=link->tx_time;out->tx_phy=link->tx_phy;out->rx_phy=link->rx_phy;}
+    xSemaphoreGive(links_mutex);
 }

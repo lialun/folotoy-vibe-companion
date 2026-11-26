@@ -16,3 +16,15 @@ bool vibe_message_post_link_json(QueueHandle_t queue, const char *json, size_t l
 void vibe_message_release(vibe_msg_t *message) {
     if (message && message->type==V_MSG_JSON) { free(message->json);message->json=NULL; }
 }
+
+bool vibe_outbound_post(QueueHandle_t queue,const char *json,uint32_t owner,vibe_delivery_t delivery) {
+    if (!queue || !json || (unsigned)delivery>V_DELIVERY_CRITICAL) return false;
+    size_t length=strlen(json);
+    if (!length || length>VIBE_JSON_MAX) return false;
+    vibe_outbound_t message={.owner=owner,.delivery=delivery,.json=malloc(length+1)};
+    if (!message.json) return false;
+    memcpy(message.json,json,length+1);
+    if (xQueueSend(queue,&message,0)==pdTRUE) return true;
+    free(message.json);
+    return false;
+}

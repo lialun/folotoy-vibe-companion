@@ -6,7 +6,7 @@
 
 Voice input. AI quota management. Your own Vibe companion. A companion desktop app makes device connections, voice setup and Agent integrations easy to manage.
 
-Wi-Fi and Bluetooth work together for steadier, more continuous voice input. Both links carry your voice while the computer merges audio and removes duplicate copies. One can fill gaps left by the other, and a usable surviving link can continue carrying speech after a disconnection. Single-link use also benefits from short audio history and missing-block repair.
+A major voice-stability upgrade makes input steadier across a wider range of network conditions. Wi-Fi and Bluetooth work together for steadier, more continuous voice input. Both links carry your voice while the computer merges audio and removes duplicate copies. One can fill gaps left by the other, and a usable surviving link can continue carrying speech after a disconnection. Single-link use also benefits from short audio history and missing-block repair.
 
 Bring remaining allowances and task alerts from everyday Agents such as Codex, Claude Code and OpenCode Go to AI Passport beside you. See allowances, reset times and task status at a glance.
 
@@ -29,9 +29,9 @@ Keep the computer awake and the app running. The computer fetches radio and onli
 
 ## Changes
 
-v1.0.0
+v1.0.1
 
-Added simultaneous Wi-Fi and Bluetooth voice delivery with merging and deduplication on the computer.
-Single-link voice gains short audio history, missing-block repair and retries for temporary send failures. Link selection resists brief jitter, trailing speech is preserved, and queued Enter waits for voice output.
-Update both firmware and desktop app and connect both links to enable dual-link voice. Sustained outages beyond the recovery window can still lose audio.
-Known issue: radio can still stutter after switching delivery to BLE when retransmissions accumulate; this release does not include a radio scheduling fix.
+A major voice-stability upgrade improves complementary dual delivery and single-link recovery across network conditions, reducing interruptions and missing audio during brief jitter or send congestion.
+Independent retries, receiver acknowledgements and larger bounded history work together. Recording takes priority in the shared voice/radio workspace; radio resumes after voice drains.
+Fix clock checks persistently rejecting normal Enter while retaining explicit gestures, deduplication and cancellation fences.
+Update both app and firmware. Very weak Wi-Fi alone can still time out, extreme loss can interrupt playback, and radio may still stutter over Bluetooth.

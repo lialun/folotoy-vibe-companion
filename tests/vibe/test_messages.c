@@ -7,6 +7,7 @@
 static unsigned allocations;
 static bool fail_allocate,full;
 static vibe_msg_t queued;
+static vibe_outbound_t outbound;
 static void *queued_ble;
 static void *allocate(size_t size) {
     if (fail_allocate) return NULL;
@@ -20,7 +21,8 @@ static void release(void *p) { if (p) { assert(allocations);--allocations;free(p
 #undef malloc
 #undef free
 int xQueueSend(QueueHandle_t queue,const void *message,unsigned timeout) {
-    assert((queue==(void *)1 || queue==(void *)2) && timeout==0);
+    assert((queue==(void *)1 || queue==(void *)2 || queue==(void *)3) && timeout==0);
+    if (queue==(void *)3) {if(full)return 0;outbound=*(const vibe_outbound_t *)message;return pdTRUE;}
     if (queue==(void *)2) { if (full) return 0;queued_ble=*(void *const *)message;return pdTRUE; }
     if (full) return 0;
     queued=*(const vibe_msg_t *)message;return pdTRUE;
@@ -58,9 +60,22 @@ int main(void) {
     assert(!vibe_ble_ingress_post((void *)2,7,42,ble,1));
     assert(!vibe_ble_ingress_post((void *)2,7,42,maximum,VIBE_JSON_MAX+2));
     ble[0]=1;assert(!vibe_ble_ingress_post((void *)2,7,42,ble,sizeof(ble)));
+    uint8_t feedback[V_VOICE_FEEDBACK_BYTES]={V_VOICE_FEEDBACK_TYPE,1};
+    assert(vibe_ble_ingress_post((void *)2,7,42,feedback,sizeof(feedback)) && allocations==1);
+    rx=queued_ble;assert(rx->length==sizeof(feedback) && rx->bytes[0]==V_VOICE_FEEDBACK_TYPE);release(rx);
+    assert(!vibe_ble_ingress_post((void *)2,7,42,feedback,sizeof(feedback)-1) && !allocations);
+    full=true;assert(!vibe_ble_ingress_post((void *)2,7,42,feedback,sizeof(feedback)) && !allocations);full=false;
     assert(vibe_ble_ingress_disconnect((void *)2,7) && allocations==1);
     rx=queued_ble;assert(rx->length==0 && rx->handle==7);release(rx);
     full=true;assert(!vibe_ble_ingress_disconnect((void *)2,7) && !allocations);full=false;
+    assert(vibe_outbound_post((void *)3,"{\"event\":\"voice.start\"}",7,V_DELIVERY_CRITICAL) && allocations==1);
+    assert(outbound.owner==7 && vibe_outbound_current(&outbound,7,false));
+    assert(!vibe_outbound_current(&outbound,8,false) && !vibe_outbound_current(&outbound,7,true));
+    release(outbound.json);
+    assert(vibe_outbound_post((void *)3,"{}",0,V_DELIVERY_PRIMARY));
+    assert(vibe_outbound_current(&outbound,8,true));release(outbound.json);
+    full=true;assert(!vibe_outbound_post((void *)3,"{}",7,V_DELIVERY_BOTH) && !allocations);full=false;
+    fail_allocate=true;assert(!vibe_outbound_post((void *)3,"{}",7,V_DELIVERY_BOTH) && !allocations);fail_allocate=false;
     puts("BLE callback ingress: deferred copy, source, bounds, full queue and allocation rollback PASS");
     puts("Compact message queue: ownership, bounds, full queue and allocation failure PASS");
 }

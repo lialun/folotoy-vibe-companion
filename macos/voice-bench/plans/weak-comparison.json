@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "transport": "dual",
+  "stages": [
+    {"name": "ble-media-a", "mask": 2, "seconds": 90},
+    {"name": "dual-a", "mask": 3, "seconds": 90},
+    {"name": "ble-media-b", "mask": 2, "seconds": 90},
+    {"name": "dual-b", "mask": 3, "seconds": 90},
+    {"name": "ble-media-c", "mask": 2, "seconds": 150},
+    {"name": "dual-c", "mask": 3, "seconds": 150}
+  ]
+}

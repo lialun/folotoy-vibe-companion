@@ -1,80 +1,41 @@
 **English** · [简体中文](release-notes.zh_CN.md)
 
-# Vibe Companion v1.0.0
+# Vibe Companion v1.0.1
 
-## New in this release
+## What changed
 
-**Wi-Fi + Bluetooth working together for steadier, more continuous voice input.** The headline upgrade lets the two links back each other up, reducing the impact of brief packet loss or a single-link disconnection.
+**A major voice-stability upgrade for steadier input across network conditions.**
 
-Voice input now uses Wi-Fi and BLE together when both authorized links are
-available. The computer merges audio by recording and sequence, discards duplicate
-copies, and can continue over a surviving link without restarting input.
+This release reworks voice transport, buffering, repair and continuous playback. Wi-Fi and Bluetooth complement each other, while either link alone gains stronger bounded recovery. The aim is fewer interruptions, stalls and missing audio during brief jitter or send congestion, and more usable everyday voice interaction.
 
-Single-link recordings also gain bounded recovery: the device retains a short
-compressed history, retries temporary send pressure, and repairs missing blocks
-requested by the computer. Link selection resists brief jitter. Trailing speech
-is drained before a queued Enter action; full disconnection or sleep stops input
-and never automatically starts a new recording.
+- **Better dual-link cooperation:** retry each carrier independently; the computer merges, deduplicates and acknowledges received audio so a slow carrier stops resending confirmed blocks.
+- **Stronger single-link recovery:** expand bounded history and improve missing-block repair and playback continuity. Capacity follows available startup memory; the tested device reserves two seconds. Larger history does not increase the normal startup prebuffer.
+- **Voice-first memory:** recording and radio share the large audio workspace. Radio yields it before recording and resumes after voice drains.
+- **Usable, explicit Enter:** fix independent clock divergence persistently rejecting Enter. Retain explicit button commands, deduplication and cancellation fences. Voice stop, timeout or recovery cannot manufacture an Enter.
+- **Clear recording ownership:** unify start, end, cancellation and drain; isolate old recordings, callbacks and repairs. Sleep or full disconnection never resumes recording automatically.
 
-Recovery has finite memory, retry and latency limits. Sustained outages can still
-lose audio; this release does not promise lossless reception in every environment.
+## Install and upgrade
 
-## Included
+Update **both the desktop app and firmware to 1.0.1** for complete receipt feedback, workspace handoff and input protection. Older peers retain their compatible protocol behavior.
 
-- Voice input and Enter, Agent task alerts, quota/weather rotation, Pomodoro,
-  Internet radio, appearance and everyday settings in the companion app.
-- Seven built-in notification integrations, quota collection for Codex, Claude
-  Code and OpenCode Go, plus local custom-Agent notification/quota callbacks.
-- One device row across Bluetooth and Wi-Fi discovery. Connect from the computer
-  and confirm on the device; confirm computer handovers on the device too.
-- Computer-decoded radio over either link, with voice interruption and resume.
-- Universal Apple Silicon/Intel macOS app, bilingual installation guides,
-  redistribution notices and a verified merged firmware image.
+Universal Apple Silicon/Intel DMG and ZIP packages are included. Follow `INSTALL.txt`. macOS may require refreshing the app's existing Accessibility permission after updating. Keep the computer awake and the app running during use.
 
-## Install and update
+Flash the merged `FoloToy-AI-Passport-full.bin` from `0x0`; this may reset settings and pairing. Developers retaining settings should follow the repository firmware-layout guide for a compatible application-partition upgrade. Verify `SHA256SUMS.txt` after downloading.
 
-Update both the desktop app and device firmware to v1.0.0 to enable the complete
-voice recovery protocol. Older peers keep their previous voice behavior.
-See `INSTALL.txt` or `INSTALL.zh_CN.txt` for setup and permissions. Keep the app
-running and the computer awake while using the device. An update may require
-refreshing the app's existing Accessibility authorization.
+Packages use free ad-hoc signing and are not Apple notarized. Agent alerts, quotas, weather, Pomodoro and radio remain available.
 
-The merged `FoloToy-AI-Passport-full.bin` is written at `0x0` and can reset saved
-settings and pairing. To preserve settings, developers should use the compatible
-application-partition upgrade described in the firmware-layout documentation.
-Verify the downloaded files against `SHA256SUMS.txt`.
+## Validation and known limits
 
-Packages use free ad-hoc signing and are not Apple notarized. The current desktop
-client supports macOS. One device authorizes one computer at a time. Online radio
-and quota data are fetched by the computer; quota availability depends on the
-Agent's existing login, plan and supplied fields.
+The complete local gate, firmware-image verification and native Mac tests passed. Recorded hardware automation passed 31 of 33 audio cases, covering individual carriers, dual delivery, repair, path changes, long recordings and radio handoff; one additional setup attempt timed out. These tests use real capture, wireless transport and CoreAudio with simulated keyboard output. The user reports improved voice behavior and working Enter; real Enter/newline was also confirmed separately.
 
-## Known issue
+The following boundaries remain disclosed:
 
-Internet radio can still stutter when delivery changes to BLE and retransmissions
-accumulate. This release does not include a radio scheduling fix.
+- Very weak Wi-Fi alone can still time out. A weak-Wi-Fi test with injected first-copy loss recovered all audio but had one 20 ms playback gap.
+- The radios share airtime and underlying scheduling can still interact. Dual delivery is not guaranteed to outperform one carrier in every environment, nor to eliminate all loss.
+- Radio may still stutter over Bluetooth when retransmissions accumulate.
+
+Battery/current, clean systems, physical Apple Silicon/minimum-macOS and complete physical multiple-computer/device acceptance remain unverified. Automation does not measure input-method recognition accuracy or subjective listening quality.
 
 ## Build from source
 
-Activate ESP-IDF 5.5.3 and run `./tools/validate.sh` for the complete gate, including
-host tests, an isolated firmware build and merged-image verification.
-`./tools/validate.sh --firmware` produces the verified
-`build/FoloToy-AI-Passport-full.bin` without the host gate. On macOS, run
-`bash macos/build.sh` for the universal app, native tests, DMG and ZIP.
-
-## Validation scope
-
-The voice implementation passed the complete local gate and native Mac tests.
-On-device automated checks passed 27/27 assertions across single Wi-Fi, single
-BLE, injected packet losses, temporary send failures, dual-link repair, full
-outage and recovery, and temporary-cache release. Eight continuity recordings
-received all 1,750 captured audio blocks without a missing playout block.
-The user confirmed long/short real speech and immediate Enter on the installed
-app and normal firmware. Sleep/wake and resumed input were manually accepted
-during the dual-link development cycle; cleanup also has native regression tests.
-These checks cover their tested conditions, not every possible radio environment.
-
-The 1.0.0 release wrapper is built again by GitHub Actions before publication.
-Long weak-signal sessions, battery/current measurements, clean-system and physical
-Apple Silicon/minimum-macOS testing, and multiple physical computers/devices
-remain outside the completed acceptance scope. The known radio issue above remains.
+Activate ESP-IDF 5.5.3 and run `./tools/validate.sh` for host tests, firmware build and merged-image verification. `./tools/validate.sh --firmware` runs only the firmware portion. On macOS, `bash macos/build.sh` creates universal packages and runs native tests. GitHub Actions rebuilds the release tag and uploads packages only after all release gates pass.

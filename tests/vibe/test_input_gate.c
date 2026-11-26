@@ -12,6 +12,34 @@ static vibe_input_result_t release(vibe_prompt_input_t *g,vibe_key_t key,bool li
     return vibe_prompt_input_event(g,key,V_RELEASE,lit,frame);
 }
 int main(void) {
+    vibe_enter_intent_t intent={0};
+    for (unsigned i=0;i<1000;i++) {
+        uint64_t now=100+i*1000;
+        assert(!vibe_enter_intent_event(&intent,V_UP,V_PRESS,now));
+        assert(!vibe_enter_intent_event(&intent,V_UP,V_RELEASE,now+100));
+        assert(!vibe_enter_intent_event(&intent,V_UP,V_RELEASE,now+110));
+        assert(intent.command==i);
+        assert(!vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,now+120));
+        assert(vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,now+140));
+        assert(intent.command==i+1 && intent.down_at==now+120 && intent.hold_ms==20);
+        assert(!vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,now+150));
+    }
+    vibe_enter_intent_event(&intent,V_UP,V_PRESS,2000000);
+    vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,2000010);
+    vibe_enter_intent_event(&intent,V_UP,V_RELEASE,2000100);
+    assert(!vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,2000200));
+    vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,2000300);
+    vibe_enter_intent_event(&intent,V_UP,V_PRESS,2000310);
+    vibe_enter_intent_event(&intent,V_UP,V_RELEASE,2000400);
+    assert(!vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,2000500));
+    vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,2000600);
+    vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,2000601);
+    assert(!vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,2000650));
+    uint32_t command=intent.command;
+    vibe_enter_intent_reset(&intent);
+    assert(intent.command==command && !intent.down && !intent.up);
+    vibe_enter_intent_event(&intent,V_DOWN,V_PRESS,2000700);
+    assert(vibe_enter_intent_event(&intent,V_DOWN,V_RELEASE,2000750) && intent.command==command+1);
     vibe_prompt_input_t g={0};
     vibe_prompt_input_sync(&g,true,first,0);
     assert(press(&g,V_DOWN,false,0)==V_INPUT_CONSUMED);

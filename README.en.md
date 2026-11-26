@@ -4,13 +4,15 @@
 
 **Voice input. AI quota management. Your own Vibe companion.**
 
-**Wi-Fi + Bluetooth working together for steadier, more continuous voice input.**
+**A major voice-stability upgrade for both dual-link and single-link input.**
 
 ![Vibe Companion: voice input and AI quotas](assets/brand/vibe-companion-hero.png)
 
 Bring remaining allowances and task alerts from everyday Agents such as Codex, Claude Code and OpenCode Go to AI Passport beside you. Express ideas with voice input and keep quotas and task status in view, so you can focus on the work in front of you.
 
 ## Two links working together, so you can keep speaking
+
+Voice delivery has been reworked for a wider range of network conditions. Stronger short-term buffering and missing-audio recovery reduce interruptions from brief jitter and congestion, while recording takes priority in the audio workspace.
 
 Send voice over Wi-Fi and Bluetooth at the same time. The computer merges the audio and removes duplicate copies. When one link briefly drops a packet, the other can fill the gap. If one disconnects, a usable surviving link can keep carrying your voice, reducing interruptions and missing speech.
 

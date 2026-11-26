@@ -1,12 +1,13 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 typedef struct cJSON cJSON;
 #ifdef __cplusplus
 extern "C" {
 #endif
 enum { V_RADIO_STOPPED, V_RADIO_CONNECTING, V_RADIO_BUFFERING, V_RADIO_PLAYING, V_RADIO_ERROR };
 typedef enum { V_RADIO_SESSION_FAILED, V_RADIO_SESSION_PLAYED, V_RADIO_SESSION_NO_MEMORY, V_RADIO_SESSION_REMOTE_ERROR } vibe_radio_result_t;
-vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void));
+vibe_radio_result_t vibe_radio_session(const char *url,bool (*cancel)(void),int16_t *pcm);
 /* init/sync/request are called by the controller while holding v_mutex. */
 void vibe_radio_catalog_init(void);
 void vibe_radio_catalog_sync(void);

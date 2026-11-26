@@ -15,6 +15,7 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "media_workspace.h"
 #include "freertos/task.h"
 #include "esp_mac.h"
 #include "esp_pm.h"
@@ -38,10 +39,11 @@ vibe_status_t v_status;
 vibe_quota_store_t v_quotas;
 SemaphoreHandle_t v_mutex;
 QueueHandle_t v_queue;
-static volatile bool input_overflow;
+static atomic_bool input_overflow;
 static bool held[3], long_press[3];
 static atomic_bool screen_visible;
 static vibe_prompt_input_t prompt_input;
+static vibe_enter_intent_t enter_intent;
 static bool intro_skipped;
 static key_guard_t wake_guard;
 static const char *TAG="vibe";
@@ -99,8 +101,13 @@ static void model_from_prefs(void) {
     v_model.theme_mode=(vibe_theme_mode_t)v_status.appearance.mode;
 }
 static void send_object(cJSON *o) {
+    const cJSON *event=cJSON_GetObjectItemCaseSensitive(o,"event");
+    bool both=cJSON_IsString(event) && !strcmp(event->valuestring,"power.reply");
     char *s=cJSON_PrintUnformatted(o);
-    if (s) { vibe_send_json(s); free(s); }
+    if (s) {
+        if (both) vibe_send_json_both(s); else vibe_send_json(s);
+        free(s);
+    }
     cJSON_Delete(o);
 }
 static void prefs_message(const char *event,const char *id, const char *error) {
@@ -225,7 +232,13 @@ static void receive_json(const char *s) {
         const cJSON *voice=cJSON_GetObjectItemCaseSensitive(o,"voiceV2");
         v_status.voice_v2=cJSON_IsNumber(voice) && voice->valuedouble==1;
         const cJSON *repair=cJSON_GetObjectItemCaseSensitive(o,"voiceRepair");
-        v_status.voice_repair=cJSON_IsNumber(repair) && repair->valuedouble==1;
+        v_status.voice_repair=v_status.voice_v2 && cJSON_IsNumber(repair) && repair->valuedouble==1;
+        const cJSON *ready=cJSON_GetObjectItemCaseSensitive(o,"voiceReady");
+        v_status.voice_handshake=v_status.voice_v2 && cJSON_IsNumber(ready) && ready->valuedouble==1;
+        const cJSON *interleave=cJSON_GetObjectItemCaseSensitive(o,"voiceInterleave");
+        v_status.voice_interleave=v_status.voice_v2 && cJSON_IsNumber(interleave) && interleave->valuedouble==1;
+        const cJSON *feedback=cJSON_GetObjectItemCaseSensitive(o,"voiceFeedback");
+        v_status.voice_feedback=v_status.voice_interleave && cJSON_IsNumber(feedback) && feedback->valuedouble==1;
         bool had_radio_pcm=v_status.radio_pcm;
         unsigned radio_formats=0;
         v_status.radio_pcm=integer(o,"radioFormats",&radio_formats,0,255) && (radio_formats&(1u<<(V_RADIO_FORMAT-1)));
@@ -324,8 +337,8 @@ static void key_callback(bsp_btn_t key,bsp_btn_ev_t event,void *user) {
     if (event!=BSP_BTN_PRESS && event!=BSP_BTN_RELEASE && event!=BSP_BTN_LONG) return;
     vibe_msg_t msg={.type=V_MSG_KEY,.key=key,.event=(int)event|
         (atomic_load_explicit(&screen_visible,memory_order_acquire)?V_KEY_SCREEN_VISIBLE:0),
-        .ui_frame=vibe_ui_connection_frame(NULL)};
-    if (xQueueSend(v_queue,&msg,0)!=pdTRUE) input_overflow=true;
+        .ui_frame=vibe_ui_connection_frame(NULL),.key_at_ms=(uint64_t)(esp_timer_get_time()/1000)};
+    if (xQueueSend(v_queue,&msg,0)!=pdTRUE) atomic_store_explicit(&input_overflow,true,memory_order_release);
 }
 static void execute(unsigned actions) {
     vibe_radio_catalog_sync();
@@ -337,7 +350,16 @@ static void execute(unsigned actions) {
             if (actions&V_START_AUDIO) { v_model.recording=false; v_status.audio_fault=true; }
         }
     }
-    if (actions&V_ENTER) vibe_send_json("{\"event\":\"key.action\",\"action\":\"enter\"}");
+    if (actions&V_ENTER) {
+        char event[256];
+        snprintf(event,sizeof(event),
+            "{\"event\":\"key.action\",\"action\":\"enter\",\"inputVersion\":1,"
+            "\"command\":%lu,\"voiceRequest\":%lu,\"pressedAtMs\":%llu,\"atMs\":%llu}",
+            (unsigned long)enter_intent.command,(unsigned long)enter_intent.voice_request,
+            (unsigned long long)enter_intent.down_at,
+            (unsigned long long)(enter_intent.down_at+enter_intent.hold_ms));
+        vibe_send_json_owned(event,enter_intent.owner,V_DELIVERY_CRITICAL);
+    }
     if (actions&V_PREFS_CHANGED) {
         unsigned brightness=v_prefs.brightness,volume=v_prefs.volume,seconds=v_prefs.screen_seconds;
         uint32_t theme=v_status.appearance.mode;
@@ -393,6 +415,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(vibe_audio_init());
     ESP_ERROR_CHECK(vibe_network_init());
     ESP_LOGI(TAG,"BLE: %s",esp_err_to_name(vibe_ble_init()));
+    ESP_ERROR_CHECK(vibe_media_init());
     vibe_ui_init();
     if (esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO)
         key_guard_arm(&wake_guard,esp_timer_get_time(),10000000);
@@ -421,11 +444,13 @@ void app_main(void) {
         v_model.enter_ready=v_status.peer && v_status.hotkey_ready && v_status.token[0];
         /* A prior codec failure must not disable Enter or prevent a wake retry. */
         v_model.voice_ready=v_model.enter_ready && v_status.audio_ready;
-        if (input_overflow) {
+        bool overflow=atomic_exchange_explicit(&input_overflow,false,memory_order_acq_rel);
+        if (overflow) {
             memset(&prompt_input,0,sizeof(prompt_input));prompt_input.consumed=7;
+            vibe_enter_intent_reset(&enter_intent);
         }
-        if (input_overflow || (v_model.recording && !v_model.voice_ready)) {
-            input_overflow=false; v_model.recording=false; execute(V_STOP_AUDIO);
+        if (overflow || (v_model.recording && !v_model.voice_ready)) {
+            v_model.recording=false;execute(V_STOP_AUDIO);
             memset(held,0,sizeof(held));
         }
         if (have && msg.type==V_MSG_JSON) { if (vibe_network_generation_matches(msg.link_generation)) receive_json(msg.json);vibe_message_release(&msg); }
@@ -439,7 +464,9 @@ void app_main(void) {
             !v_model.connection_from_menu && v_status.peer && v_status.token[0];
         if (finish_guide && !requested_setup_close) requested_setup_close=vibe_provision_connected();
         if (!finish_guide) requested_setup_close=false;
-        if (have && msg.type==V_MSG_AUDIO_FAIL) { v_model.recording=false; v_status.audio_fault=true; }
+        if (have && msg.type==V_MSG_AUDIO_FAIL && msg.link_generation==v_model.voice_request) {
+            v_model.recording=false;v_status.audio_fault=true;
+        }
         vibe_connect_tick(&v_status.connection_request,now);
         bool connection_prompt=v_status.connection_request.phase==V_CONNECT_PENDING;
         uint32_t prompt_frame=vibe_ui_connection_frame(v_status.connection_request.request);
@@ -450,9 +477,15 @@ void app_main(void) {
             reported_prompt_frame=prompt_frame;
             ESP_LOGI(TAG,"Connection confirmation visible frame=%lu",(unsigned long)prompt_frame);
         }
+        bool enter_released=false;
         if (have && msg.type==V_MSG_KEY && msg.key>=0 && msg.key<3) {
             int k=msg.key;
             vibe_event_t event=msg.event==BSP_BTN_PRESS?V_PRESS:msg.event==BSP_BTN_RELEASE?V_RELEASE:V_LONG;
+            if (k==V_DOWN && event==V_PRESS) {
+                enter_intent.voice_request=v_model.voice_request;
+                enter_intent.owner=vibe_network_generation();
+            }
+            enter_released=vibe_enter_intent_event(&enter_intent,k,event,msg.key_at_ms);
             vibe_input_result_t result=vibe_prompt_input_event(&prompt_input,k,event,key_screen_visible,msg.ui_frame);
             if (result!=V_INPUT_PASS) {
                 if (result==V_INPUT_ACCEPT || result==V_INPUT_REJECT)
@@ -478,10 +511,13 @@ void app_main(void) {
                 held[k]=false; a=vibe_model_key(&v_model,k,V_RELEASE,now);
                 if (!long_press[k]) a|=vibe_model_key(&v_model,k,V_CLICK,now);
             }
+            if ((a&V_ENTER) && !enter_released) {
+                a&=~V_ENTER;ESP_LOGI(TAG,"Enter gesture rejected hold_ms=%u gap_ms=%u",enter_intent.hold_ms,enter_intent.gap_ms);
+            }
             if (a&(V_START_AUDIO|V_ENTER)) vibe_agent_dismiss(&v_status.agent_alert);
             execute(a);
             /* Bounded per-gesture diagnostics: no audio, network or credentials. */
-            ESP_LOGI(TAG,"key=%d event=%d page=%d->%d timer=%d->%d left=%llu",k,msg.event,
+            ESP_LOGD(TAG,"key=%d event=%d page=%d->%d timer=%d->%d left=%llu",k,msg.event,
                 before_page,v_model.page,before_timer,v_model.timer,
                 (unsigned long long)vibe_model_remaining(&v_model,now));
         }

@@ -1,17 +1,19 @@
 import Foundation
 
 enum VoiceCodec {
+    static let sampleRate:Double=16000
+    static let blockSamples=1600,blockBytes=804
     // Wire-compatible with the community firmware's independent 100ms IMA blocks.
     static let steps = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767]
     static let changes = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8]
     static func decode(_ data: Data) -> [Int16]? {
-        guard data.count == 804 else { return nil }
+        guard data.count == blockBytes else { return nil }
         let bytes = Array(data)
         guard bytes[2] <= 88, bytes[3] == 0 else { return nil }
         var predictor = Int(Int16(bitPattern: UInt16(bytes[0]) | UInt16(bytes[1]) << 8))
         var index = Int(bytes[2]); var samples = [Int16(predictor)]
-        samples.reserveCapacity(1600)
-        for n in 0..<1599 {
+        samples.reserveCapacity(blockSamples)
+        for n in 0..<(blockSamples-1) {
             let code = Int((bytes[4 + n / 2] >> (n % 2 * 4)) & 15)
             let step = steps[index]
             var delta = step >> 3

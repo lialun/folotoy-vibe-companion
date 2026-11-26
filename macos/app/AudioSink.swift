@@ -6,12 +6,16 @@ enum AudioFailure: Error, LocalizedError {
     case unavailable, code(OSStatus)
     var errorDescription:String? { switch self { case .unavailable:return "未找到 BlackHole 2ch，请先安装音频驱动";case .code(let n):return "音频设备无法启动（\(n)），请检查 BlackHole" } }
 }
-final class AudioSink {
+final class AudioSink:VoicePCMOutput {
+    private var metrics=VoiceOutputMetrics()
+    private var continuity=PCMContinuity()
     private var queue:AudioQueueRef?
     private var buffers:[AudioQueueBufferRef]=[]
     private let lock=NSLock()
-    private var samples:[Int16]=[], offset=0
-    private(set) var running=false
+    private var samples=PCMRing()
+    private var inFlight:[UInt:Int]=[:]
+    private var healthy=false
+    var running:Bool {lock.lock();defer{lock.unlock()};return healthy}
     static func deviceUID() -> String? {
         var address=AudioObjectPropertyAddress(mSelector:kAudioHardwarePropertyDevices,mScope:kAudioObjectPropertyScopeGlobal,mElement:kAudioObjectPropertyElementMain)
         var size:UInt32=0
@@ -30,8 +34,9 @@ final class AudioSink {
     }
     func start() throws {
         stop()
+        lock.lock();metrics=VoiceOutputMetrics();continuity=PCMContinuity();lock.unlock()
         guard let uid=Self.deviceUID() else { throw AudioFailure.unavailable }
-        var format=AudioStreamBasicDescription(mSampleRate:16000,mFormatID:kAudioFormatLinearPCM,mFormatFlags:kLinearPCMFormatFlagIsSignedInteger|kLinearPCMFormatFlagIsPacked,mBytesPerPacket:2,mFramesPerPacket:1,mBytesPerFrame:2,mChannelsPerFrame:1,mBitsPerChannel:16,mReserved:0)
+        var format=AudioStreamBasicDescription(mSampleRate:VoiceCodec.sampleRate,mFormatID:kAudioFormatLinearPCM,mFormatFlags:kLinearPCMFormatFlagIsSignedInteger|kLinearPCMFormatFlagIsPacked,mBytesPerPacket:2,mFramesPerPacket:1,mBytesPerFrame:2,mChannelsPerFrame:1,mBitsPerChannel:16,mReserved:0)
         var q:AudioQueueRef?
         let e=AudioQueueNewOutput(&format,{ context,q,buffer in
             guard let context else { return }; Unmanaged<AudioSink>.fromOpaque(context).takeUnretainedValue().fill(q,buffer)
@@ -41,34 +46,76 @@ final class AudioSink {
         var rawDevice=Unmanaged.passUnretained(device).toOpaque()
         var result=withExtendedLifetime(device) { AudioQueueSetProperty(q,kAudioQueueProperty_CurrentDevice,&rawDevice,UInt32(MemoryLayout<CFString>.size)) }
         if result != noErr { stop(); throw AudioFailure.code(result) }
-        for _ in 0..<3 {
+        for _ in 0..<VoicePolicy.outputBufferCount {
             var buffer:AudioQueueBufferRef?
-            result=AudioQueueAllocateBuffer(q,640,&buffer)
+            result=AudioQueueAllocateBuffer(q,UInt32(VoicePolicy.outputBufferSamples*2),&buffer)
             guard result==noErr,let buffer else { stop(); throw AudioFailure.code(result) }
-            buffers.append(buffer); memset(buffer.pointee.mAudioData,0,640); buffer.pointee.mAudioDataByteSize=640
-            AudioQueueEnqueueBuffer(q,buffer,0,nil)
+            buffers.append(buffer); memset(buffer.pointee.mAudioData,0,VoicePolicy.outputBufferSamples*2); buffer.pointee.mAudioDataByteSize=UInt32(VoicePolicy.outputBufferSamples*2)
+            result=AudioQueueEnqueueBuffer(q,buffer,0,nil)
+            guard result==noErr else {stop();throw AudioFailure.code(result)}
         }
+        lock.lock();healthy=true;lock.unlock()
         result=AudioQueueStart(q,nil)
-        guard result==noErr else { stop(); throw AudioFailure.code(result) }; running=true
+        guard result==noErr else { stop(); throw AudioFailure.code(result) }
     }
-    func append(_ pcm:[Int16]) {
+    @discardableResult func append(_ pcm:[Int16])->Bool {
         lock.lock(); defer { lock.unlock() }
-        if samples.count-offset>8000 { samples=[];offset=0 } // cap latency at 500ms under overload
-        samples.append(contentsOf:pcm)
+        guard samples.append(pcm) else {metrics.dropped+=pcm.count;return false}
+#if VIBE_VOICE_BENCH
+        for value in pcm {
+            let bits=UInt16(bitPattern:value)
+            metrics.fixtureAppendHash=(metrics.fixtureAppendHash ^ UInt32(bits&255)) &* 16777619
+            metrics.fixtureAppendHash=(metrics.fixtureAppendHash ^ UInt32(bits>>8)) &* 16777619
+        }
+#endif
+        metrics.appended+=pcm.count;metrics.highWater=max(metrics.highWater,samples.count)
+        return true
+    }
+    func snapshot()->VoiceOutputMetrics {
+        lock.lock();defer{lock.unlock()}
+        var value=metrics
+        value.queued=samples.count
+        value.inFlight=inFlight.values.reduce(0,+)
+        value.interruptions=continuity.interruptions
+        value.interruptedSamples=continuity.samples
+        value.longestInterruption=continuity.longest
+        return value
     }
     private func fill(_ q:AudioQueueRef,_ buffer:AudioQueueBufferRef) {
-        let count=320; let output=buffer.pointee.mAudioData.assumingMemoryBound(to:Int16.self)
+        let count=VoicePolicy.outputBufferSamples; let output=buffer.pointee.mAudioData.assumingMemoryBound(to:Int16.self)
         lock.lock()
-        let n=min(count,samples.count-offset)
-        if n>0 { for i in 0..<n { output[i]=samples[offset+i] };offset+=n }
+        let key=UInt(bitPattern:buffer)
+        metrics.rendered+=inFlight[key] ?? 0
+        inFlight[key]=nil
+        guard healthy else {lock.unlock();return}
+        let n=samples.read(into:output,maximum:count)
+        continuity.consume(n,requested:count)
+#if VIBE_VOICE_BENCH
+        for i in 0..<n {
+            let bits=UInt16(bitPattern:output[i])
+            metrics.fixtureReadHash=(metrics.fixtureReadHash ^ UInt32(bits&255)) &* 16777619
+            metrics.fixtureReadHash=(metrics.fixtureReadHash ^ UInt32(bits>>8)) &* 16777619
+        }
+#endif
+        inFlight[key]=n
+        metrics.underrun+=count-n
         if n<count { for i in n..<count { output[i]=0 } }
-        if offset>=3200 { samples.removeFirst(offset);offset=0 }
         lock.unlock()
-        buffer.pointee.mAudioDataByteSize=640; AudioQueueEnqueueBuffer(q,buffer,0,nil)
+        buffer.pointee.mAudioDataByteSize=UInt32(count*2)
+        if AudioQueueEnqueueBuffer(q,buffer,0,nil) != noErr {
+            lock.lock()
+            metrics.dropped+=inFlight.removeValue(forKey:key) ?? 0
+            healthy=false
+            lock.unlock()
+        }
     }
     func stop() {
-        if let q=queue { AudioQueueStop(q,true);AudioQueueDispose(q,true) };queue=nil;buffers=[];running=false
-        lock.lock();samples=[];offset=0;lock.unlock()
+        lock.lock();healthy=false;lock.unlock()
+        if let q=queue { AudioQueueStop(q,true);AudioQueueDispose(q,true) };queue=nil;buffers=[]
+        lock.lock()
+        metrics.dropped+=samples.count+inFlight.values.reduce(0,+)
+        samples.clear();inFlight.removeAll(keepingCapacity:true)
+        lock.unlock()
     }
     deinit { stop() }
 }

@@ -9,6 +9,12 @@ int main(void) {
     assert(!vibe_ble_tx_admit(5,5,true));
     assert(vibe_ble_tx_admit(3,2,false)); /* Control can use the protected reserve. */
     assert(!vibe_ble_tx_admit(2,0,false));
+    assert(vibe_ble_tx_frame_admit(13,6,true,true,817,237)); /* Pools may cooperate. */
+    for (unsigned total=0;total<=24;total++) for(unsigned pool=0;pool<=12;pool++) {
+        bool admitted=vibe_ble_tx_frame_admit(total,pool,true,true,817,237);
+        if(admitted) assert(total>=9 && pool>=4); /* Global whole-frame and per-pool reserve. */
+        assert(vibe_ble_tx_frame_admit(total,pool,false,true,100,237)==vibe_ble_tx_admit(total,pool,false));
+    }
     assert(vibe_ble_tx_wait(100,129,true) && !vibe_ble_tx_wait(100,130,true));
     assert(vibe_ble_tx_wait(100,149,false) && !vibe_ble_tx_wait(100,150,false));
     assert(!vibe_ble_tx_wait(100,99,true));

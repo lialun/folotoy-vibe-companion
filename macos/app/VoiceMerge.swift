@@ -1,190 +1,121 @@
 import Foundation
 
-struct VoiceFrame {
-    static let wireSize=817,blockSize=804
-    static let maxFrames:UInt32=2000
-    let session:UInt64,sequence:UInt32,block:Data
-    static func parse(_ data:Data)->Self? {
-        guard data.count==wireSize,data.first==6,data[15]<=88,data[16]==0 else {return nil}
-        var session:UInt64=0,sequence:UInt32=0
-        for i in 0..<8 {session |= UInt64(data[1+i])<<(i*8)}
-        for i in 0..<4 {sequence |= UInt32(data[9+i])<<(i*8)}
-        guard session != 0,sequence<maxFrames else {return nil}
-        return Self(session:session,sequence:sequence,block:data.subdata(in:13..<wireSize))
-    }
-}
-
-// Compressed blocks live on the computer. Playout deadlines, rather than the
-// arrival order of either link, decide when a block becomes irrecoverably late.
+/// A bounded sequence buffer. After initial prefill, ordered speech moves to
+/// the PCM consumer, whose hardware clock sets the playback rate. Unknown
+/// future sequence numbers never become synthetic losses.
 struct VoiceMerge {
-    static let capacity:UInt32=8,prefill:TimeInterval=0.12,period:TimeInterval=0.1
-    static let rescueBudget:TimeInterval=0.2
-    static let bleRepairPrefill:TimeInterval=0.16
+    static let capacity=VoicePolicy.compressedCapacity
+    static let period=TimeInterval(VoiceCodec.blockSamples)/VoiceCodec.sampleRate
+    static let prefill=VoicePolicy.prefill
+    static let repairWait=VoicePolicy.gapWait
     enum Output {case audio(VoiceFrame,ConnectionTransport),silence(UInt32)}
+
     let session:UInt64
     let repairHistory:Int
     private let startupPrefill:TimeInterval
     private var blocks:[UInt32:(VoiceFrame,ConnectionTransport)]=[:]
-    private var holes:Set<UInt32>=[]
     private var seen:Set<UInt32>=[]
-    private var deadline:TimeInterval?,endCount:UInt32?
-    private var played=false
-    private var highest:UInt32?
-    private var waiting=false
-    private(set) var extraDelay:TimeInterval=0,rescued=0
-    private(set) var next:UInt32=0,accepted=0,duplicates=0,late=0,recovered=0,missing=0,resyncs=0
-    private(set) var wifiCopies=0,bleCopies=0
-    private(set) var lateFirst=0
+    private var highest:UInt32?,endCount:UInt32?
+    private var readyAt:TimeInterval?,holeSince:TimeInterval?,holeDeadline:TimeInterval?
+    private var primed=false
+    private(set) var next:UInt32=0
+    private(set) var accepted=0,duplicates=0,late=0,lateFirst=0,missing=0,recovered=0
+    private(set) var wifiCopies=0,bleCopies=0,resyncs=0
+    private(set) var maxWait:TimeInterval=0
     var received:Int {seen.count}
     var buffered:Int {blocks.count}
-    init(session:UInt64,repairHistory:Int=0,prefill:TimeInterval?=nil) {
-        self.session=session;self.repairHistory=repairHistory
-        self.startupPrefill=max(Self.prefill,min(prefill ?? Self.prefill,Self.bleRepairPrefill))
+    var complete:Bool {endCount.map{next >= $0} ?? false}
+    var receiptMask:UInt32 {
+        blocks.keys.reduce(UInt32(0)) {mask,sequence in
+            sequence>=next && sequence-next<32 ? mask | (UInt32(1)<<(sequence-next)):mask
+        }
     }
+
+    init(session:UInt64,repairHistory:Int=0,prefill:TimeInterval?=nil) {
+        self.session=session
+        self.repairHistory=repairHistory
+        startupPrefill=prefill ?? Self.prefill
+    }
+
+    @discardableResult
     mutating func accept(_ frame:VoiceFrame,via source:ConnectionTransport,now:TimeInterval)->Bool {
         guard frame.session==session,frame.block.count==VoiceFrame.blockSize,
-              frame.sequence<VoiceFrame.maxFrames else {return false}
-        if source == .wifi {wifiCopies+=1}else{bleCopies+=1}
-        if endCount.map({frame.sequence >= $0})==true {late+=1;return false}
+              frame.sequence<VoiceFrame.maxFrames,
+              endCount.map({frame.sequence<$0}) ?? true else {return false}
+        if source == .wifi {wifiCopies+=1} else {bleCopies+=1}
         let first=seen.insert(frame.sequence).inserted
-        highest=max(highest ?? frame.sequence,frame.sequence)
-        if frame.sequence<next {late+=1;if first {lateFirst+=1};return false}
-        if blocks[frame.sequence] != nil {duplicates+=1;return false}
+        if !first {duplicates+=1;return false}
+        if frame.sequence<next {late+=1;lateFirst+=1;return false}
         if frame.sequence-next>=Self.capacity {
-            // A long outage must not turn into seconds of stale playback.
-            missing+=Int(frame.sequence-next);next=frame.sequence;resyncs+=1
-            blocks.removeAll(keepingCapacity:true);holes.removeAll(keepingCapacity:true)
-            deadline=now+startupPrefill
-            waiting=false
+            let floor=frame.sequence-Self.capacity+1
+            let retained=UInt32(max(1,repairHistory))
+            let repairFloor=max(floor,frame.sequence+1>retained ? frame.sequence+1-retained:0)
+            let available=blocks.keys.filter{$0>=floor}.min() ?? frame.sequence
+            let resume=max(floor,min(available,repairFloor))
+            missing+=Int(resume-next)
+            next=resume
+            blocks=blocks.filter{$0.key>=resume}
+            holeSince=nil;holeDeadline=nil
+            resyncs+=1
         }
-        if deadline==nil {deadline=now+startupPrefill}
-        if frame.sequence>next {
-            for seq in next..<frame.sequence where blocks[seq]==nil {holes.insert(seq)}
-        }
-        if holes.remove(frame.sequence) != nil {recovered+=1}
-        blocks[frame.sequence]=(frame,source);accepted+=1
+        if let highest,frame.sequence<highest {recovered+=1}
+        highest=max(highest ?? frame.sequence,frame.sequence)
+        blocks[frame.sequence]=(frame,source)
+        accepted+=1
+        if !primed,readyAt==nil {readyAt=now+startupPrefill}
         return true
     }
+
     mutating func finish(frames:UInt32) {
-        guard frames<=VoiceFrame.maxFrames else {return}
-        endCount=frames;blocks=blocks.filter{$0.key<frames};holes=holes.filter{$0<frames}
+        guard frames<=VoiceFrame.maxFrames,endCount==nil || endCount==frames else {return}
+        endCount=frames
+        blocks=blocks.filter{$0.key<frames}
     }
+
+    private var frontier:UInt32 {endCount ?? highest.map{$0+1} ?? 0}
+
     func repairCandidates(now:TimeInterval,started:TimeInterval,history:Int)->[UInt32] {
-        guard endCount != 0 else {return []}
-        var upper=highest.map{$0+1} ?? 0
-        if let end=endCount {upper=max(upper,end)}
-        if let due=deadline,now>=due-0.02 {upper=max(upper,next+1)}
-        if highest==nil,now-started>=0.18 {upper=max(upper,1)}
-        upper=min(upper,next+Self.capacity,endCount ?? VoiceFrame.maxFrames)
-        guard upper>next else {return []}
-        // A low-memory device may retain only two blocks. Never spend request
-        // credit on older frames that already fell outside its advertised ring.
-        let frontier=max((highest ?? 0)+1,endCount ?? 0)
+        let upper=min(frontier,next+Self.capacity)
+        if highest==nil,endCount==nil,now-started>=VoicePolicy.initialProbe {return [0]}
+        guard history>=2,upper>next else {return []}
         let lower=max(next,frontier>UInt32(history) ? frontier-UInt32(history):0)
         guard lower<upper else {return []}
-        return (lower..<upper).filter{blocks[$0]==nil}.prefix(4).map{$0}
+        return (lower..<upper).filter{blocks[$0]==nil}.prefix(VoiceControl.maxRepairBatch).map{$0}
     }
-    mutating func drain(now:TimeInterval)->[Output] {
-        guard var due=deadline,now>=due,next<(endCount ?? VoiceFrame.maxFrames) else {return []}
-        if !played,let first=blocks.keys.min(),first>next {
-            let retained=repairHistory>=2 ? UInt32(repairHistory):0
-            let lower=retained>0 ? max(next,first+1>retained ? first+1-retained:0):first
-            missing+=Int(lower-next);next=lower
+
+    mutating func drain(now:TimeInterval,maximum:Int=Int(Self.capacity),queuedDuration:TimeInterval=0)->[Output] {
+        guard maximum>0 else {return []}
+        guard next<frontier else {
+            // Do not reapply startup delay after a temporary empty frontier.
+            // Already-buffered PCM continues to protect the consumer.
+            holeSince=nil;holeDeadline=nil
+            return []
         }
-        played=true
-        if waiting {
-            // Both paths can stall together. Spend a bounded additional delay
-            // rather than throwing away speech that arrives just after due.
-            let delay=min(max(0,now-due),max(0,Self.rescueBudget-extraDelay))
-            if blocks[next] != nil || delay>=Self.rescueBudget-extraDelay-0.000001 {
-                if blocks[next] != nil {rescued+=1}
-                extraDelay+=delay;due+=delay;waiting=false
-            } else {return []}
+        if !primed {
+            guard let readyAt,now+0.000001>=readyAt else {return []}
+            primed=true
         }
-        if now-due>0.3 {
-            let limit=endCount ?? VoiceFrame.maxFrames
-            let count=UInt32(min(floor((now-due)/Self.period),Double(limit>next ? limit-next:0)))
-            next+=count;missing+=Int(count);resyncs+=1;due+=Double(count)*Self.period
-            blocks=blocks.filter{$0.key>=next};holes=holes.filter{$0>=next}
-        }
-        var out:[Output]=[]
-        while now+0.000001>=due,out.count<2,next<(endCount ?? VoiceFrame.maxFrames) {
-            if blocks[next]==nil,extraDelay<Self.rescueBudget-0.000001 {
-                waiting=true;break
+        var output:[Output]=[]
+        while output.count<min(maximum,Int(Self.capacity)),next<frontier {
+            if let (frame,source)=blocks.removeValue(forKey:next) {
+                output.append(.audio(frame,source))
+                holeSince=nil;holeDeadline=nil
+            } else {
+                if holeSince==nil {
+                    holeSince=now
+                    // Repair may use the speech already ahead of this hole
+                    // in CoreAudio, plus the existing bounded extra wait.
+                    holeDeadline=now+max(0,queuedDuration)+Double(output.count)*Self.period+Self.repairWait
+                }
+                let wait=max(0,now-(holeSince ?? now))
+                maxWait=max(maxWait,wait)
+                guard now+0.000001>=(holeDeadline ?? now) else {break}
+                output.append(.silence(next))
+                missing+=1
+                holeSince=nil;holeDeadline=nil
             }
-            if let (frame,source)=blocks.removeValue(forKey:next) {out.append(.audio(frame,source))}
-            else {out.append(.silence(next));missing+=1}
-            holes.remove(next);next+=1;due+=Self.period
+            next+=1
         }
-        deadline=due;return out
-    }
-    func tailDelay(now:TimeInterval)->TimeInterval {
-        guard let end=endCount,end>next else {return 0.18}
-        // End can arrive before the first audio copy on the other link.
-        guard let due=deadline else {return 0.36}
-        // Includes the last 100 ms block and the CoreAudio output buffers.
-        let rescue=max(0,Self.rescueBudget-extraDelay)
-        return min(1,max(0.36,due-now+Double(end-next)*Self.period+rescue+0.08))
-    }
-}
-
-// No periodic acknowledgement traffic: request only a hole that can still play.
-// Both per-frame and aggregate limits bound extra BLE airtime during congestion.
-struct VoiceRepairTracker {
-    let started:TimeInterval,history:Int
-    private var attempts:[UInt32:(Int,TimeInterval)]=[:]
-    private var last:TimeInterval = -.infinity
-    private(set) var sent=0
-    private(set) var rejected=0
-    init(started:TimeInterval,history:Int){self.started=started;self.history=history}
-    mutating func request(_ merge:VoiceMerge,now:TimeInterval)->[UInt32] {
-        guard history>=2,history<=4,now>=started,now-last>=0.06 else {return []}
-        attempts=attempts.filter{$0.key>=merge.next && $0.key<merge.next+VoiceMerge.capacity}
-        let frames=merge.repairCandidates(now:now,started:started,history:history).filter {
-            guard let attempt=attempts[$0] else {return true}
-            return attempt.0<2 && now-attempt.1>=0.08
-        }
-        guard !frames.isEmpty else {return []}
-        for frame in frames {attempts[frame]=((attempts[frame]?.0 ?? 0)+1,now)}
-        last=now;sent+=1;return frames
-    }
-    mutating func submissionFailed(_ frames:[UInt32],now:TimeInterval) {
-        for frame in frames {
-            guard let attempt=attempts[frame],attempt.1==now else {continue}
-            if attempt.0==1 {attempts.removeValue(forKey:frame)}
-            else {attempts[frame]=(attempt.0-1,attempt.1)}
-        }
-        // Preserve the global cadence while refunding requests that never
-        // reached either transport. The recording/playout lifetime still ends.
-        sent=max(0,sent-1);rejected+=1
-    }
-}
-
-// A terminal event may beat start across links. Retain its ID so late copies
-// cannot reopen a released recording. IDs are scoped to one device boot.
-struct VoiceSessionEvents {
-    private(set) var newest=0
-    static func session(_ body:[String:Any])->UInt64? {
-        guard body["voiceVersion"] as? Int==2,let text=body["voiceSession"] as? String,
-              text.utf8.count==16,text.utf8.allSatisfy({(48...57).contains($0)||(97...102).contains($0)}),
-              let value=UInt64(text,radix:16),value != 0 else {return nil}
-        return value
-    }
-    mutating func accept(id:Int)->Bool {
-        guard id>newest else {return false};newest=id;return true
-    }
-}
-
-// A quick Enter after release must follow the drained audio. Never replay it
-// after disconnect, sleep, permission loss or a recording timeout.
-struct VoiceEnterBuffer {
-    private(set) var pending=0
-    mutating func receive(recording:Bool,ending:Bool)->Bool {
-        if !recording {return true}
-        if ending {pending=min(8,pending+1)}
-        return false
-    }
-    mutating func take(allowed:Bool)->Int {
-        let count=allowed ? pending:0;pending=0;return count
+        return output
     }
 }
