@@ -26,8 +26,8 @@ static inline bool vibe_peer_heartbeat_due(uint64_t now,uint64_t sent,uint64_t s
            now>=sent && now-sent>=interval_ms+2000;
 }
 
-/* Discovery never acquires the control endpoint. Only authenticated traffic,
- * or a correctly addressed physical-code pairing, may claim an idle lease. */
+/* Anonymous discovery never acquires the control endpoint. Claiming a lease
+ * requires a trusted credential or a physically approved pairing. */
 static inline bool vibe_peer_claim_allowed(bool authenticated,bool pairing,bool occupied,bool same_endpoint) {
     return (authenticated || pairing) && (!occupied || same_endpoint);
 }

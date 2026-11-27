@@ -333,8 +333,7 @@ void vibe_ui_refresh(void) {
         const char *state="语音输入就绪",*hint="",*value="";
         if (m.recording) { state="正在输入";hint="松开上键，完成输入";snprintf(text,sizeof(text),"%02u:%02u",(unsigned)((now-m.recording_since_ms)/60000),(unsigned)((now-m.recording_since_ms)/1000%60));value=text; }
 
-        else if (!s.wifi && !s.ble_peer && s.token[0]) { state="等待电脑";hint="请打开伴侣客户端"; }
-        else if (!s.token[0]) { state="连接电脑";hint="请在电脑点击连接"; }
+        else if (!s.paired) { state="连接电脑";hint="请在电脑点击连接"; }
         else if (!s.peer) { state="等待电脑";hint="请打开伴侣客户端"; }
         else if (!s.audio_ready || !s.hotkey_ready) { state="语音未就绪";hint="在客户端完成语音设置"; }
         else if (s.audio_fault) { state="请再试一次";hint="按住上键重试音频"; }
@@ -405,7 +404,7 @@ void vibe_ui_refresh(void) {
                 text[0]=0;
                 if (i<3) snprintf(text,sizeof(text),"%u%s",i==0?m.brightness:i==1?m.volume:m.screen_seconds,i==2?" 秒":"%");
                 if (i==V_SETTING_THEME) snprintf(text,sizeof(text),"%s",themes[m.theme_mode<=V_THEME_SCHEDULED?m.theme_mode:V_THEME_SCHEDULED]);
-                row(i,i==V_SETTING_UNPAIR&&m.reset_confirm?"确认解除配对？":names[i],text,m.selected==(unsigned)i,m.editing && m.selected==(unsigned)i);
+                row(i,i==V_SETTING_UNPAIR&&m.reset_confirm?"解除所有电脑？":names[i],text,m.selected==(unsigned)i,m.editing && m.selected==(unsigned)i);
             }
         } else if (m.page==V_POMODORO) {
             bool armed=m.timer==V_TIMER_ARMED;

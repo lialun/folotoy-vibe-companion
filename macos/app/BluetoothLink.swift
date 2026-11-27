@@ -69,6 +69,12 @@ final class BluetoothLink:NSObject,CBCentralManagerDelegate,CBPeripheralDelegate
         notificationReady=false;lastReceived = .distantPast
         resetWrites()
     }
+    func waitForOwner(_ id:String) {
+        // A standby computer must not occupy the spare handover slot or turn
+        // advertisements into a rapid connect/read/disconnect loop.
+        retries[id,default:BLEConnectionRetry()].waitForOwner(until:Date().addingTimeInterval(15))
+        if device==id {disconnect()}
+    }
     func disconnect(after delay:TimeInterval,when allowed:@escaping ()->Bool) {
         let expected=generation
         queue.asyncAfter(deadline:.now()+delay) { [weak self] in

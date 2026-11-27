@@ -65,7 +65,9 @@ static inline vibe_input_result_t vibe_prompt_input_event(vibe_prompt_input_t *g
         uint8_t previous=g->down;bool blocked=(g->consumed&bit)!=0;g->down|=bit;
         if (!g->active && !(g->consumed&bit)) return V_INPUT_PASS;
         g->consumed|=bit;
-        if (previous || blocked || !g->armed || !lit || !g->frame || captured_frame!=g->frame) g->candidate=0;
+        /* Only the two displayed actions can decide a connection request.
+         * Consume the settings gesture without leaking it to the page below. */
+        if (key==V_SETTINGS || previous || blocked || !g->armed || !lit || !g->frame || captured_frame!=g->frame) g->candidate=0;
         else g->candidate=bit;
         g->armed=false;return V_INPUT_CONSUMED;
     }

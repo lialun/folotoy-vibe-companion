@@ -12,6 +12,14 @@
 
 ## Unreleased
 
+## v1.0.2 - 2026-11-27
+
+- Remember up to four independently approved computers and automatically reconnect when the current session is released, without taking over an active computer.
+- Preserve each trusted computer's credentials across handover, require physical confirmation for immediate switching, and clarify per-computer versus all-computer unpairing.
+- Fix Wi-Fi hotspot setup failures by isolating Bluetooth and provisioning resource lifetimes, restoring Bluetooth after setup, and reducing setup-page transfer size.
+- Show immediate Wi-Fi connection progress, suppress duplicate submissions, and restore editable inputs after failure.
+- Simplify connection confirmation to Confirm/Cancel and clarify that BlackHole status indicates driver detection rather than the selected microphone.
+
 ## v1.0.1 - 2026-11-26
 
 - Substantially improve voice stability across network conditions, strengthening complementary Wi-Fi/Bluetooth delivery and bounded single-link recovery to reduce interruptions and missing audio during brief jitter or send congestion.

@@ -24,26 +24,72 @@ connection and Wi-Fi entries. Cancellation and expiry preserve saved networks,
 the previous authorization and guide progress. An entire dark-screen wake
 gesture is excluded from confirmation decisions.
 
+Phone setup temporarily stops the BLE host/controller before starting the hotspot
+and HTTP server. Exiting, saving or rolling back setup restores BLE automatically;
+OS bonds, trusted-computer credentials and the fixed media reserve are retained.
+A failed restore is retried by the existing network worker. Normal operation still
+supports simultaneous Wi-Fi and BLE.
+
+Submitting Wi-Fi credentials dismisses the phone keyboard and replaces the form
+with a visible connection indicator before awaiting the server response. Reloading
+an active connection restores that waiting view. Failure returns to the editable
+form with the error retained; success shows confirmation before closing the page.
+
+The page has a build-time gzip representation in flash, negotiated through
+Accept-Encoding, with the original HTML as fallback. No compressor or extra page
+buffer is allocated at runtime. Phone setup bounds its HTTP server to two LRU
+sessions and a 4 KiB task stack.
+Status replies copy only their own fields instead of the entire device status.
+This leaves more heap for TCP traffic while retaining the media reserve. Startup
+checks Wi-Fi setup, HTTP allocation and every route; a failure closes partial
+resources and allows retry instead of advertising an unusable portal. Logs report
+response errors, remaining heap, the largest block and HTTP stack headroom.
+
 ## Connect and change computers
 
 1. Install matching firmware and desktop builds; allow Bluetooth/local-network access.
 2. Click **Connect** in **Connection & voice**. The last four ID digits distinguish units.
 3. The device wakes and displays the requesting computer name. Press the upper key
-   to accept, or the lower/settings key to cancel.
+   to accept, or the lower key to cancel. The settings key has no action on this page.
 4. Authorized computers reconnect automatically. Wi-Fi and BLE can remain attached
    together. A healthy primary link stays selected, including BLE after Wi-Fi
    returns. Sustained failure can use the other authenticated attachment without
    another confirmation.
 
-Another computer can request a connection directly. The device asks to switch;
-only acceptance and successful credential persistence revoke the previous authorization.
-Denial, cancellation and expiry preserve the old binding. A revoked desktop pauses
-reconnection instead of competing. **Disconnect** keeps authorization and pauses
-reconnection. **Unpair** revokes the computer's application authorization while
-retaining saved Wi-Fi and OS-level BLE encryption bonds. A retained bond cannot
+The device remembers up to four individually approved computers, with one active
+controller at a time. After each computer's first approval, taking the device
+between home and work can reconnect it automatically. Another computer cannot
+automatically take over while the active computer's Wi-Fi or BLE session remains
+valid. A waiting desktop shows that the device is in use and reconnects once it
+becomes available. It releases its standby BLE connection and waits at least
+fifteen seconds before probing again, leaving a connection slot for handover.
+If both computers are nearby, the first authenticated idle-session claim wins;
+there is no location-based preference.
+
+Clicking **Connect** can still request an immediate switch. Device confirmation
+and successful persistence precede changing the active controller; other trusted
+computers keep their credentials. Denial, cancellation and expiry preserve the
+current session. **Disconnect** keeps authorization and pauses reconnection on
+that desktop. Desktop **Unpair** removes only that computer; the device's
+**Unpair** menu clears all trusted computers and explicitly names that scope in
+its confirmation. Both retain saved Wi-Fi and
+OS-level BLE encryption bonds. A removed credential pauses reconnection and
+requires fresh physical approval. A retained bond cannot
 authorize commands or bypass a fresh physical confirmation. Erasing BLE keys on
 only one side causes a stale-pairing failure on macOS and is not part of this action.
 Selecting another device asks before discarding unsaved settings.
+
+Firmware and desktop must both support trusted-computer standby. An older
+desktop may pause after a handover instead of waiting automatically. The previous
+single saved credential migrates on its first authenticated reconnection; computers
+whose credentials had already been replaced by old firmware need approval once.
+The registry never silently evicts an approved computer when full.
+
+An explicit disconnect of the sole BLE attachment frees its session immediately.
+Silent loss retains the existing lease of three negotiated heartbeat intervals
+(up to ninety seconds), so brief interference does not trigger a takeover.
+Refreshing discovery does not request a takeover; click the device's **Connect**
+action to request one deliberately.
 
 ## Confirmation protocol and boundaries
 
@@ -63,16 +109,26 @@ after the stale system record is forgotten; a healthy Wi-Fi session is retained.
 
 LAN control, discovery and radio audio use UDP 33333. Radio audio carries a
 random session and bounded sequence window; receipt masks repair missing blocks
-without replaying duplicates. BLE supports the same audio and controls. Discovery replies contain device identity, occupancy and
-capabilities without changing the control destination. Broadcasts never contain
+without replaying duplicates. BLE supports the same audio and controls. Anonymous
+discovery reports device identity, occupancy and capabilities without changing
+the control destination. An addressed, authenticated `pc.status` discovery beacon
+can claim an idle session. Broadcasts never contain
 credentials. `connection.request` carries client UUID, request UUID, printable ASCII
 computer alias and a SHA-256 commitment to a candidate credential. Repeating the
 same request over either link neither extends its deadline nor replaces another
 computer's pending request.
 
+An authenticated discovery reply separates `trusted` (a remembered credential)
+from `authorized` (this computer currently owns the session). A trusted standby
+desktop retains its credential and retries without requesting confirmation.
+These fields are evaluated only when `authChecked` is true; public BLE metadata
+does not describe a particular computer's trust. Standby business commands are
+rejected. A new owner clears old endpoints, readiness and computer quota data,
+and advances the command generation; device preferences and weather stay intact.
+
 The device waits forty-five seconds for a button decision, followed by twenty
 seconds for credential commitment after acceptance. Client, request and digest
-must match the approval. Persistence precedes replacing the old authorization.
+must match the approval. Persistence precedes switching the active controller.
 Legacy numeric pairing cannot bypass physical approval. Recording returns busy;
 the desktop can cancel. The displayed computer name is not a trusted identity.
 
@@ -155,8 +211,9 @@ genuine failures retain backoff, and cached observations keep their original age
 ## Acceptance
 
 Host tests cover identity merging, dual attachment, fallback, denial, expiry,
-busy state, wrong commitments, revoked authorization, framing boundaries and
-session generations. Hardware acceptance still needs multiple computers/devices,
+busy state, wrong commitments, revoked authorization, framing boundaries,
+trusted standby, repeated automatic handovers, registry persistence failures,
+legacy migration, restart decoding and session generations. Hardware acceptance still needs multiple computers/devices,
 confirmation rendering/buttons, reconnection on each transport, voice/Enter,
 Agent notifications, settings, switch latency, coexistence memory and sleep behavior.
 

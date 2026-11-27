@@ -12,22 +12,29 @@ class Element {
   replaceChildren(){this.children=[]}
   add(option){this.children.push(option)}
   append(option){this.children.push(option)}
-  focus(){}
+  focus(){this.focused=true}
+  blur(){this.blurred=true}
+  scrollIntoView(){this.scrolled=true}
+  setAttribute(name,value){this[name]=value}
 }
-async function fixture(scan,saved={networks:[{ssid:'Saved test',preferred:true}],capacity:5}){
+async function fixture(scan,saved={networks:[{ssid:'Saved test',preferred:true}],capacity:5},initial={}){
   const elements=new Map();
   const element=id=>{if(!elements.has(id)){const e=new Element();e.id=id;elements.set(id,e)}return elements.get(id)};
-  const state={scan,saved};
+  const state={scan,saved,status:{connected:false},save:{ok:true},calls:[],...initial};
+  element('connectionProgress').hidden=true;
+  const keyboard=new Element();
   const context=vm.createContext({
-    document:{getElementById:element,createElement:tag=>{const e=new Element();e.tag=tag;return e}},
+    document:{getElementById:element,activeElement:keyboard,createElement:tag=>{const e=new Element();e.tag=tag;return e}},
     Option:Element,AbortController,TextEncoder,setTimeout,clearTimeout,window:{close(){}},confirm:()=>false,
     fetch:async path=>{
-      const value=path==='/status'?{connected:false}:path==='/saved'?state.saved:state.scan;
+      state.calls.push(path);
+      const selected=path==='/status'?state.status:path==='/saved'?state.saved:path==='/save'?state.save:state.scan;
+      const value=typeof selected==='function'?await selected():selected;
       return {ok:!value.error,json:async()=>value};
     }
   });
   vm.runInContext(script,context);await new Promise(setImmediate);
-  return {element,state,refresh:async()=>{await vm.runInContext('scan()',context)}};
+  return {element,state,keyboard,refresh:async()=>{await vm.runInContext('scan()',context)}};
 }
 const busy=await fixture({error:'scan_busy'});
 assert(busy.element('network').options.some(option=>option.value==='Saved test'));
@@ -51,4 +58,49 @@ for(const error of ['scan_failed','scan_memory']){
 const first=await fixture([],{networks:[],capacity:5});
 assert(first.element('network').selectedOptions[0].dataset.manual);
 assert(!first.element('ssid').hidden);
-console.log('Phone portal UI: saved/nearby separation, failed versus empty scan, refresh recovery and retained saved list PASS');
+// Delay the POST itself: feedback must appear before the device acknowledges it.
+const submit=await fixture([{ssid:'New test',rssi:-40}],{networks:[],capacity:5});
+for(const option of submit.element('network').options)option.selected=option.value==='New test';
+submit.element('network').onchange();submit.element('password').value='12345678';
+let accepted;submit.state.save=()=>new Promise(resolve=>{accepted=resolve});
+submit.state.status={connected:true};
+const pending=submit.element('form').onsubmit({preventDefault(){}});
+assert(submit.element('form').hidden && !submit.element('connectionProgress').hidden);
+assert(!submit.element('connectionSpinner').hidden && submit.element('connectedMark').hidden);
+assert.equal(submit.element('connectionTitle').textContent,'正在连接 Wi-Fi');
+assert.equal(submit.element('form')['aria-busy'],'true');
+assert(submit.keyboard.blurred && submit.element('connectionProgress').focused && submit.element('connectionProgress').scrolled);
+await submit.element('form').onsubmit({preventDefault(){}});
+assert.equal(submit.state.calls.filter(path=>path==='/save').length,1);
+accepted({ok:true});await pending;
+assert(submit.element('connectionSpinner').hidden && !submit.element('connectedMark').hidden);
+assert.equal(submit.element('connectionTitle').textContent,'Wi-Fi 已连接');
+assert(submit.element('form').hidden && submit.element('connect').disabled);
+assert.equal(submit.element('password').value,'');
+
+// Both rejected submissions and device connection failures return to a usable form.
+for(const postError of [true,false]){
+  const failed=await fixture([]);
+  failed.state.save=postError?{error:'busy'}:{ok:true};
+  failed.state.status={failed:true,message:'密码不正确，请重试。'};
+  await failed.element('form').onsubmit({preventDefault(){}});
+  assert(!failed.element('form').hidden && failed.element('connectionProgress').hidden);
+  assert(!failed.element('connect').disabled && failed.element('status').error);
+  assert.equal(failed.element('form')['aria-busy'],'false');
+  assert.equal(failed.element('connect').textContent,'连接 Wi-Fi');
+  failed.state.save={ok:true};failed.state.status={connected:true};
+  await failed.element('form').onsubmit({preventDefault(){}});
+  assert(!failed.element('connectedMark').hidden && failed.element('connect').disabled);
+}
+
+// Reloading an in-progress page shows the same waiting state and retains errors.
+let finishPoll,reads=0;
+const resume=await fixture([],{networks:[{ssid:'Saved test'}]},
+  {status:()=>++reads===1?{connecting:true}:new Promise(resolve=>{finishPoll=resolve})});
+assert(!resume.element('connectionProgress').hidden && resume.element('form').hidden);
+finishPoll({failed:true,message:'连接失败，请重试。'});
+await new Promise(setImmediate);
+assert(!resume.element('form').hidden && resume.element('connectionProgress').hidden);
+assert.equal(resume.element('status').textContent,'连接失败，请重试。');
+assert(resume.element('status').error && resume.element('network').options.some(option=>option.value==='Saved test'));
+console.log('Phone portal UI: visible submit/resume progress, keyboard dismissal, duplicate prevention, failure/retry, success and network lists PASS');

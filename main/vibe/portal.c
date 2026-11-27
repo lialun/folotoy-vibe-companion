@@ -82,3 +82,48 @@ unsigned vibe_portal_dns_poll(int dns_socket) {
     }
     return received;
 }
+
+static bool coding(const char *begin,const char *end,const char *name) {
+    size_t n=strlen(name);if ((size_t)(end-begin)!=n) return false;
+    for (size_t i=0;i<n;i++) {
+        unsigned char c=(unsigned char)begin[i];if (c>='A' && c<='Z') c+='a'-'A';
+        if (c!=(unsigned char)name[i]) return false;
+    }
+    return true;
+}
+static bool header_space(char c) {return c==' ' || c=='\t';}
+static int coding_quality(const char *begin,const char *end) {
+    while (begin<end && header_space(*begin)) ++begin;
+    if (begin==end) return 1000;
+    if (*begin++!=';') return 0;
+    while (begin<end && header_space(*begin)) ++begin;
+    if (begin==end || (*begin!='q' && *begin!='Q')) return 0;
+    ++begin;while (begin<end && header_space(*begin)) ++begin;
+    if (begin==end || *begin++!='=') return 0;
+    while (begin<end && header_space(*begin)) ++begin;
+    if (begin==end || (*begin!='0' && *begin!='1')) return 0;
+    int whole=*begin++-'0',fraction=0,scale=100;
+    if (begin<end && *begin=='.') {
+        ++begin;
+        while (begin<end && *begin>='0' && *begin<='9') {
+            if (!scale || (whole && *begin!='0')) return 0;
+            fraction+=(*begin++-'0')*scale;scale/=10;
+        }
+    }
+    while (begin<end && header_space(*begin)) ++begin;
+    return begin==end?whole*1000+fraction:0;
+}
+bool vibe_portal_accepts_gzip(const char *header) {
+    if (!header) return false;
+    int gzip=-1,wildcard=-1;
+    for (const char *at=header;*at;) {
+        const char *end=strchr(at,',');if (!end) end=at+strlen(at);
+        while (at<end && header_space(*at)) ++at;
+        const char *token=at;while (at<end && !header_space(*at) && *at!=';') ++at;
+        int quality=coding_quality(at,end);
+        if (coding(token,at,"gzip")) gzip=quality;
+        else if (coding(token,at,"*")) wildcard=quality;
+        at=*end?end+1:end;
+    }
+    return (gzip>=0?gzip:wildcard)>0;
+}

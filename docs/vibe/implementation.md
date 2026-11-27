@@ -89,7 +89,7 @@ or globally replace the computer's microphone. WeType selects BlackHole explicit
 
 ## Power policy
 
-BLE remains available for discovery and authorized control. There is no idle capture, continuous level meter, animation or cloud connection.
+Outside phone Wi-Fi setup, BLE remains available for discovery and authorized control. There is no idle capture, continuous level meter, animation or cloud connection.
 Idle Wi-Fi uses minimum modem sleep; ESP-IDF automatic light sleep/tickless idle
 is requested. Speech temporarily disables modem sleep for lower latency and
 returns to modem sleep on release. Discovery is every two seconds until found;
@@ -2587,3 +2587,13 @@ released. The user confirmed clear on-device instructions and an automatic
 phone popup after approximately five seconds. This is a user estimate for one
 phone, not a controlled before/after comparison. Manual browser access was not
 exercised in this follow-up because the page appeared automatically.
+
+### Trusted-computer reconnection and Wi-Fi setup (2026-11-27)
+
+The device stores up to four independent computer credentials in one bounded NVS blob. Persistent trust is distinct from the single active controller. Idle claims retain physical first-approval and explicit-takeover boundaries; handover resets endpoint readiness, quota ownership and command generations. The desktop keeps trusted standby credentials, yields its BLE slot and backs off probes without overriding manual Disconnect. Desktop Unpair removes the current computer; device Unpair clears the registry. Neither operation erases OS Bluetooth bonds or saved Wi-Fi networks.
+
+Provisioning and Bluetooth have exclusive resource lifetimes. The network worker pauses and joins the BLE host before starting AP/HTTP resources, unwinds partial startup, and restores BLE after teardown with bounded deferred retries. The setup page uses a generated gzip asset with raw fallback and immediately displays submission progress, suppresses duplicates and supports failure/retry. Production voice/media memory budgets are unchanged. Connection confirmation exposes only Confirm/Cancel; the settings gesture is consumed without deciding the request or reaching the page underneath. BlackHole status explicitly reports driver detection, not the selected system/input-method microphone.
+
+Pre-release validation passed repository/host checks, firmware image checks, universal Mac packaging and native tests. Two physical Macs on one LAN passed trusted standby without takeover, physical decline/accept, automatic reconnection in both directions after quitting the other app, and voice/Enter after switching. The phone's complete hotspot/page/network-list/saved-network/return-to-Home flow passed before the loading-only UI increment. The final confirmation layout passed actual LVGL rendering; its installed normal firmware archive is `891786f88455ab10a6b72ec8ef0805578723d94dc37721ca5a167c3e28404723`, matching ELF `d1c2a8bcda8d8e4cff286fd00dacb9ecbb53b43f0be564705b34e741c2de5db7`. It predates the release version bump.
+
+Build: PASS (pre-release builds). Host tests: PASS. Device tests: PASS only for the scopes above. Unverified: pure-BLE multi-computer voice/handover, the latest phone loading UI and physical two-action confirmation follow-up were skipped; one guarded provisioning loop did not reach its third cycle and remains inconclusive. Turning off the test Mac's Wi-Fi also removed its internet, so the resulting input-method recognition failure does not establish a BLE media defect. Power/battery testing remains deferred, and clean-system/platform and multiple-device endurance are outside this acceptance. Final release artifacts and CI are verified separately during publication.

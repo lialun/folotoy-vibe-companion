@@ -46,9 +46,13 @@ class ReleasePackageTests(unittest.TestCase):
                 self.assertTrue(link.startswith(("https://", "http://", "#")),
                                 f"standalone release guide has a missing local target: {link}")
         notes = (self.output / "RELEASE_NOTES.md").read_text()
-        self.assertIn("Agent", notes)
-        self.assertIn("macOS", notes)
-        self.assertNotIn("0.6.0", notes)
+        # Release topics change; the package must retain both current documents
+        # completely without leaking repository-only language-navigation links.
+        for language in (".zh_CN", ""):
+            source = (ROOT / f"docs/vibe/release-notes{language}.md").read_text()
+            navigation, body = source.split("\n", 1)
+            self.assertIn(body.strip(), notes)
+            self.assertNotIn(navigation, notes)
         self.assertNotIn(str(ROOT), notes)
         before = (self.output / "SHA256SUMS.txt").read_bytes()
         self.assertEqual(self.package().returncode, 0)

@@ -83,7 +83,7 @@ struct CompanionView:View {
                 DeviceConnectionView(model:model)
             }
             card("语音通道","waveform") {
-                readiness("音频驱动",detail:model.state.audio ? "BlackHole 2ch" : "尚未检测到 BlackHole 2ch",ready:model.state.audio) {
+                readiness("音频驱动",detail:model.state.audio ? "已检测到 BlackHole 2ch" : "尚未检测到 BlackHole 2ch",ready:model.state.audio) {
                     Button("重新检测") { model.retryConnection() }
                 }
                 audioSetup
@@ -114,7 +114,7 @@ struct CompanionView:View {
                         Spacer()
                         InputMethodSettingsView()
                     }
-                    Text("麦克风选择 BlackHole 2ch，并启用“按住说话”。")
+                    Text("在输入法中选择 BlackHole 2ch，并启用“按住说话”。")
                         .font(.system(size:11)).foregroundStyle(Palette.muted)
                     ShortcutSettingsView(model:model)
                 }

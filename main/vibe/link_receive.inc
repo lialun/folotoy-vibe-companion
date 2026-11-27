@@ -1,6 +1,6 @@
 #include "radio/remote.h"
 #include "radio/stream.h"
-/* Shared ingress. Discovery/approval never acquires the business session. */
+/* Shared ingress. Anonymous discovery/approval never acquires the business session. */
 static const char *link_string(cJSON *o,const char *key) {
     const cJSON *v=cJSON_GetObjectItemCaseSensitive(o,key);return cJSON_IsString(v)?v->valuestring:NULL;
 }
@@ -48,7 +48,8 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
         xSemaphoreTake(v_mutex,portMAX_DELAY);
         vibe_connection_request_t *r=&v_status.connection_request;
         if (!strcmp(type,"connection.request")) {
-            if (!v_model.recording && vibe_connect_begin(r,client,request,digest,link_string(o,"name"),v_status.token[0]!=0,now)) result=vibe_connect_state(r);
+            if (v_computers.count==VIBE_TRUSTED_MAX && !vibe_trusted_has(&v_computers,client)) result="full";
+            else if (!v_model.recording && vibe_connect_begin(r,client,request,digest,link_string(o,"name"),s.paired,now)) result=vibe_connect_state(r);
         } else if (vibe_connect_matches(r,client,request,digest)) { r->phase=V_CONNECT_CANCELLED;result="cancelled"; }
         xSemaphoreGive(v_mutex);
         vibe_msg_t message={.type=V_MSG_CONNECTION_CHANGED};(void)xQueueSend(v_queue,&message,0);
@@ -57,12 +58,18 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
     bool authenticated=false,claimed=false;uint32_t generation=0;
     xSemaphoreTake(v_mutex,portMAX_DELAY);
     authenticated=token && v_status.token[0] && !strcmp(token,v_status.token);
+    bool legacy=v_legacy_computer && authenticated && vibe_connect_identity(client) &&
+        (!v_computers.count || vibe_trusted_matches(&v_computers,client,token));
+    bool trusted=vibe_trusted_matches(&v_computers,client,token) || legacy;
     bool approved=addressed && type && !strcmp(type,"pair") && vibe_connection_approved(token,client,request);
     xSemaphoreTake(peer_mutex,portMAX_DELAY);
     bool pair=addressed && type && !strcmp(type,"pair") && vibe_connect_identity(client) &&
         (approved || (authenticated && owner_client[0] && !strcmp(owner_client,client)));
     bool same_client=vibe_connect_identity(client) && owner_client[0] && !strcmp(owner_client,client);
     bool occupied=owner_seen && now-owner_seen<vibe_peer_timeout(s.heartbeat);
+    vibe_connect_tick(&v_status.connection_request,now);
+    bool approving=v_status.connection_request.phase==V_CONNECT_PENDING || v_status.connection_request.phase==V_CONNECT_ACCEPTED;
+    bool claim=discovery && type && !strcmp(type,"pc.status") && trusted && !occupied && !v_model.recording && !approving && !release_after_send;
     if(type && (!strcmp(type,"voice.repair") || !strcmp(type,"voice.ready") || !strcmp(type,"voice.cancel"))) {
         /* Repairs cannot claim a lease or enter the UI command queue. Only the
          * current authenticated endpoint may request this recording's cache. */
@@ -99,11 +106,12 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
     }
     if (pair && vibe_message_post_link_json(v_queue,(const char *)packet+1,n-1,0)) {
         if (approved) { commit_peer=*from;commit_ble=via_ble; }
-    } else if (addressed && authenticated && (!occupied || same_client) && vibe_connect_identity(client)) {
-        bool new_owner=!same_client;
+    } else if (addressed && !release_after_send && ((authenticated && same_client && occupied) || claim) && vibe_connect_identity(client)) {
+        bool new_owner=!same_client || !occupied;
         generation=owner_generation+(new_owner?1:0);if (!generation) generation=1;
         if (discovery || vibe_message_post_link_json(v_queue,(const char *)packet+1,n-1,generation)) {
-            if (new_owner) { memset(&peer,0,sizeof(peer));memset(&ble_peer,0,sizeof(ble_peer));ble_owner=false;prefer_ble=false;wifi_seen=ble_seen=0; }
+            if (legacy && !vibe_trusted_matches(&v_computers,client,token)) (void)vibe_trusted_put(&v_computers,client,token);
+            if (new_owner) select_owner_locked(client,token);
             owner_generation=generation;strlcpy(owner_client,client,sizeof(owner_client));owner_seen=now;
             if (via_ble) { ble_peer=*from;ble_owner=true;ble_seen=now; } else { peer=*from;wifi_seen=now; }
             if (discovery && type && !strcmp(type,"pc.status")) {
@@ -121,6 +129,6 @@ static void process_packet(const uint8_t *packet,size_t n,const struct sockaddr_
     xSemaphoreGive(peer_mutex);xSemaphoreGive(v_mutex);
     if (claimed && discovery && type && !strcmp(type,"pc.status"))
         (void)vibe_message_post_link_json(v_queue,(const char *)packet+1,n-1,generation);
-    if (discovery && (!target || addressed)) hello_to(from,via_ble,authenticated && claimed,token!=NULL);
+    if (discovery && (!target || addressed)) hello_to(from,via_ble,claimed,token!=NULL,trusted);
     cJSON_Delete(o);
 }

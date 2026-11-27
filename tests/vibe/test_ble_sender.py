@@ -30,6 +30,7 @@ static bool pressure,tx_locked,wide_enabled,wide_pressure,small_live,wide_live,s
 static unsigned reports,mtu=247,notify_attempts,fail_notify_at,controls;
 static unsigned small_base,wide_base,small_held,wide_held;
 static bool retain_notifications;
+static bool ble_enabled=true,ready=true;
 static void *tx_mutex=(void*)1,*links_mutex=(void*)2;
 static uint8_t message_id;
 static uint16_t tx_handle=20;
@@ -97,6 +98,8 @@ static void vTaskDelay(unsigned n){clock_ms+=n;}
 '''
 main=r'''
 int main(void){
+ ble_enabled=false;assert(vibe_ble_send_to(1,1,"x",1)<0 && !allocations && !tx_locked);
+ ble_enabled=true;ready=false;assert(vibe_ble_send_to(1,1,"x",1)<0 && !allocations && !tx_locked);ready=true;
  uint8_t body[816]={0};
  contention=20;assert(!vibe_ble_send_to(1,6,body,sizeof(body)));assert(requested==30&&clock_ms==20&&notifications==4&&!tx_locked);
  trailing=211;notifications=0;assert(!vibe_ble_send_to(1,6,body,sizeof(body)));

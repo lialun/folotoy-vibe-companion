@@ -18,6 +18,10 @@ button:disabled{opacity:.55;cursor:default}.text-button{padding:0;min-height:24p
 #savedCredential{font-size:14px;margin:4px 0 22px;color:var(--muted)}#savedCredential .row{margin-top:12px;justify-content:flex-start;gap:20px}
 #status{font-size:14px;margin:18px 2px 0;padding:14px;background:#e7ecdf;border-radius:12px;line-height:1.6;white-space:pre-line}
 #status.error{background:#f7e5dc;color:#8f4632}.footnote{font-size:13px;margin:22px 4px 0}.badge{display:inline-block;border-radius:8px;background:#e7ecdf;padding:4px 8px;font-size:12px;margin-bottom:18px}
+.connection-state{text-align:center;padding:18px 0 12px;scroll-margin-top:20px;outline:none}.connection-state h2{font-size:23px;margin:18px 0 0}
+.spinner,.connected-mark{display:block;width:44px;height:44px;margin:auto}.spinner{border:4px solid #dfe9df;border-top-color:var(--green);border-radius:50%;animation:spin .9s linear infinite}
+.connected-mark{color:var(--green);font-size:34px;line-height:44px}@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
 [hidden]{display:none!important}
 </style>
 <main>
@@ -26,6 +30,11 @@ button:disabled{opacity:.55;cursor:default}.text-button{padding:0;min-height:24p
   <p>只需设置网络。其他功能，稍后在电脑端调整。</p>
   <section class="card">
     <div class="badge">支持 2.4 GHz Wi-Fi</div>
+    <div id="connectionProgress" class="connection-state" tabindex="-1" hidden>
+      <span id="connectionSpinner" class="spinner" aria-hidden="true"></span>
+      <span id="connectedMark" class="connected-mark" aria-hidden="true" hidden>✓</span>
+      <h2 id="connectionTitle">正在连接 Wi-Fi</h2>
+    </div>
     <form id="form">
       <div class="row"><label for="network">Wi-Fi 名称</label><button id="rescan" type="button" class="text-button">刷新</button></div>
       <select id="network" required><option value="" disabled selected>正在搜索附近的 Wi-Fi…</option></select>
@@ -47,7 +56,16 @@ let polling=false,scanBusy=false,submitting=false,completed=false,savedRows=[],s
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function status(message,error=false){$('status').textContent=message;$('status').classList.toggle('error',error)}
 function busy(value){for(const id of ['network','ssid','password','connect','rescan','changePassword','forget'])$(id).disabled=value}
-function complete(){completed=true;busy(true);$('show').disabled=true;$('connect').textContent='已连接';status('Wi-Fi 已连接，配网页面即将关闭。');setTimeout(()=>window.close(),500)}
+function connectionView(state){
+  const pending=state==='connecting',visible=state!=='idle',progress=$('connectionProgress');
+  const entering=visible&&progress.hidden;
+  $('form').hidden=visible;$('form').setAttribute('aria-busy',String(pending));progress.hidden=!visible;
+  $('connectionSpinner').hidden=!pending;$('connectedMark').hidden=state!=='connected';
+  $('connectionTitle').textContent=pending?'正在连接 Wi-Fi':'Wi-Fi 已连接';
+  $('connect').textContent=pending?'正在连接…':state==='connected'?'已连接':'连接 Wi-Fi';
+  if(entering){document.activeElement?.blur();progress.focus({preventScroll:true});progress.scrollIntoView({block:'start'})}
+}
+function complete(){completed=true;busy(true);$('show').disabled=true;connectionView('connected');status('设备将自动返回首页，配网页面即将关闭。');setTimeout(()=>window.close(),500)}
 function manual(){
   const option=$('network').selectedOptions[0];const yes=!!option?.dataset.manual;
   $('ssid').hidden=!yes;$('ssid').required=yes;$('network').required=!yes;
@@ -108,7 +126,7 @@ async function scan(){
   }finally{scanBusy=false;$('rescan').disabled=false;changingPassword=false;manual()}
 }
 async function poll(){
-  if(polling)return;polling=true;busy(true);const deadline=Date.now()+35000;
+  if(polling)return;polling=true;busy(true);connectionView('connecting');const deadline=Date.now()+35000;
   try{
     while(Date.now()<deadline){
       try{
@@ -120,7 +138,7 @@ async function poll(){
       await delay(1000);
     }
     throw Error('等待连接超时。请确认仍连接着设备热点，然后重试。');
-  }catch(error){status(error.message,true)}finally{polling=false;if(!completed)busy(false)}
+  }catch(error){status(error.message,true)}finally{polling=false;if(!completed){busy(false);connectionView('idle')}}
 }
 $('network').onchange=()=>{changingPassword=false;$('password').value='';manual()};$('rescan').onclick=scan;
 $('changePassword').onclick=()=>{changingPassword=!changingPassword;$('password').value='';manual();if(changingPassword)$('password').focus()};
@@ -141,12 +159,15 @@ $('form').onsubmit=async event=>{
   const bytes=new TextEncoder().encode(password).length;
   if(!useSaved&&((bytes&&bytes<8)||bytes>63)){status('Wi-Fi 密码应为 8 至 63 个字节；开放网络可留空。',true);return}
   if(!savedRows.some(row=>row.ssid===ssid)&&savedRows.length>=savedCapacity){status('最多保存 '+savedCapacity+' 个 Wi-Fi，请先忘记一个旧网络。',true);return}
-  submitting=true;busy(true);status('正在连接，请稍等…');
+  submitting=true;busy(true);connectionView('connecting');status('请保持手机连接设备热点，正在确认网络…');
   try{await request('/save',useSaved?{ssid,useSaved:true}:{ssid,password});$('password').value='';await poll()}
-  catch(error){status(error.message,true);busy(false)}finally{submitting=false}
+  catch(error){status(error.message,true);busy(false);connectionView('idle')}finally{submitting=false}
 };
 (async()=>{
-  try{const state=await request('/status');if(state.connected){complete();return}if(state.connecting){await poll();if(completed)return}}catch{}
+  try{const state=await request('/status');if(state.connected){complete();return}if(state.connecting){
+    status('请保持手机连接设备热点，正在确认网络…');await poll();if(completed)return;
+    const failure=$('status').textContent;await scan();status(failure,true);return;
+  }}catch{}
   await scan();
 })();
 </script>

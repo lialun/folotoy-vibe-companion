@@ -1,6 +1,7 @@
 #include "peer.h"
 #include "radio/stream.h"
 #include "connection_request.h"
+#include "trusted_computers.h"
 #include "voice_tx.h"
 #include "cJSON.h"
 #include <assert.h>
@@ -33,22 +34,26 @@ static bool vibe_voice_repair_request(uint64_t session,const uint32_t *frames,un
     if(!session)return false;
     assert(frames && count && count<=4 && owner==owner_generation);++repair_count;return true;
 }
-static bool hello_authorized,hello_checked;
-static struct { bool ble_peer,provisioning,voice_feedback;unsigned heartbeat_ms;uint64_t peer_seen_ms;char token[65];vibe_connection_request_t connection_request; } v_status;
+static bool hello_authorized,hello_checked,hello_trusted;
+static vibe_trusted_computers_t v_computers;
+static bool v_legacy_computer;
+static unsigned char v_quotas[8];
+static struct { bool ble_peer,provisioning,voice_feedback,peer,audio_ready,hotkey_ready,radio_pcm,voice_v2,voice_repair,voice_handshake,voice_interleave;unsigned heartbeat_ms;uint64_t peer_seen_ms;char token[65];vibe_connection_request_t connection_request; } v_status;
 static struct { bool recording; } v_model;
-typedef struct { unsigned heartbeat;char device[18]; } link_snapshot_t;
+typedef struct { unsigned heartbeat;bool paired;char device[18]; } link_snapshot_t;
 static bool locks[3];
 static void xSemaphoreTake(int lock,int wait) { (void)wait;assert(!locks[lock]);assert(!(lock==1 && locks[2]));locks[lock]=true; }
 static void xSemaphoreGive(int lock) { assert(locks[lock]);locks[lock]=false; }
 static uint64_t vibe_now(void) { return now_ms; }
-static link_snapshot_t link_snapshot(void) { return (link_snapshot_t){.heartbeat=5000,.device="aabbccddeeff"}; }
+static link_snapshot_t link_snapshot(void) { return (link_snapshot_t){.heartbeat=5000,.paired=v_computers.count>0 || v_legacy_computer,.device="aabbccddeeff"}; }
 static size_t copy_text(char *to,const char *from,size_t cap) { size_t n=strlen(from);snprintf(to,cap,"%s",from);return n; }
 #define strlcpy copy_text
 static bool vibe_json_depth_ok(const char *text,size_t n) { (void)text;return n>0; }
 static bool vibe_message_post_link_json(int queue,const char *text,size_t n,uint32_t generation) {
     (void)queue;assert(n<sizeof(posted));memcpy(posted,text,n);posted[n]=0;posted_generation=generation;++post_count;return true;
 }
-static void hello_to(const struct sockaddr_in *to,bool ble,bool auth,bool checked) {
+static void hello_to(const struct sockaddr_in *to,bool ble,bool auth,bool checked,bool trusted) {
+    hello_trusted=trusted;
     hello_checked=checked;
     (void)to;(void)ble;(void)checked;hello_authorized=auth;++hello_count;
 }
@@ -75,6 +80,7 @@ static bool vibe_voice_uplink_feedback(const vibe_voice_feedback_t *feedback,uin
     ++feedback_count;return true;
 }
 #define sendto capture_send
+#include "link_owner.inc"
 #include "link_receive.inc"
 #include "link_release.inc"
 static struct sockaddr_in endpoint(unsigned host,unsigned port) {
@@ -86,6 +92,7 @@ static void receive(unsigned type,const char *json,struct sockaddr_in from,bool 
 static void reset(bool bound) {
     memset(&peer,0,sizeof(peer));memset(&ble_peer,0,sizeof(ble_peer));memset(&v_status,0,sizeof(v_status));
     if (bound) memset(v_status.token,'a',64);
+    v_computers=(vibe_trusted_computers_t){0};v_legacy_computer=bound;
     ble_owner=false;prefer_ble=false;owner_seen=wifi_seen=ble_seen=0;owner_generation=1;owner_client[0]=0;post_count=hello_count=0;v_model.recording=false;
     release_generation=0;release_after_send=false;last_sent_ms=0;
 }
@@ -178,7 +185,7 @@ int main(void) {
     for (unsigned cycle=0;cycle<100;cycle++) {
         reset(true);receive(3,auth,a,false);receive(3,auth,ble,true);
         uint32_t old_generation=owner_generation;unsigned before=post_count;
-        v_status.token[0]=0;release_generation=owner_generation;release_after_send=true;last_sent_ms=now_ms;
+        v_status.token[0]=0;v_computers=(vibe_trusted_computers_t){0};v_legacy_computer=false;release_generation=owner_generation;release_after_send=true;last_sent_ms=now_ms;
         finish_release();
         assert(!peer.sin_port && !ble_peer.sin_port && !ble_owner && !owner_client[0] && !owner_seen && !last_sent_ms);
         assert(hello_checked && !hello_authorized); /* Immediate explicit revocation notice to the old endpoints. */
@@ -194,5 +201,49 @@ int main(void) {
         release_generation=owner_generation;release_after_send=true;finish_release();
         assert(v_status.token[0] && !ble_owner); /* Ordinary disconnect retains the credential. */
     }
+    const char *client_b="33333333-3333-3333-3333-333333333333";
+    reset(true);receive(3,auth,a,false);
+    assert(vibe_trusted_matches(&v_computers,client,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert(vibe_trusted_put(&v_computers,client_b,credential));v_legacy_computer=false;
+    char auth_b[512];snprintf(auth_b,sizeof(auth_b),"{\"role\":\"pc\",\"type\":\"pc.status\",\"client\":\"%s\",\"device\":\"aabbccddeeff\",\"token\":\"%s\"}",client_b,credential);
+    for (unsigned cycle=0;cycle<100;cycle++) {
+        receive(3,auth,a,false);receive(3,auth,ble,true);
+        uint32_t owner_a=owner_generation;unsigned posted_a=post_count;
+        receive(3,auth_b,b,false);
+        assert(hello_trusted && !hello_authorized && owner_generation==owner_a && post_count==posted_a);
+        assert(!strcmp(owner_client,client) && ble_owner); /* Healthy A is not preempted. */
+        receive(2,auth_b,b,false);assert(post_count==posted_a); /* Knowing a key grants no active commands. */
+        now_ms+=15001; /* Both A paths have missed their lease, not just BLE. */
+        receive(3,auth_b,b,false);
+        assert(hello_authorized && hello_trusted && !strcmp(owner_client,client_b));
+        assert(owner_generation!=owner_a && !ble_owner && !strcmp(v_status.token,credential));
+        assert(v_computers.count==2); /* Handoff never revokes the other computer. */
+        receive(3,auth,a,false);assert(hello_trusted && !hello_authorized);
+        unsigned posted_b=post_count;receive(2,auth,a,false);assert(post_count==posted_b);
+        now_ms+=15001;
+        receive(3,auth,a,false);assert(hello_authorized && !strcmp(owner_client,client));
+    }
+    /* An idle device cannot be seized by an arbitrary delayed business command. */
+    now_ms+=15001;unsigned before_idle=post_count;
+    receive(2,auth_b,b,false);assert(post_count==before_idle && !strcmp(owner_client,client));
+    v_model.recording=true;receive(3,auth_b,b,false);assert(!hello_authorized && hello_trusted);
+    v_model.recording=false;
+    receive(2,ask,b,false);receive(3,auth_b,b,false);
+    assert(!hello_authorized && hello_trusted); /* Explicit confirmation has priority over auto-claim. */
+    v_status.connection_request=(vibe_connection_request_t){0};
+    receive(3,auth_b,b,false);assert(hello_authorized);
+    assert(vibe_trusted_remove(&v_computers,client_b));v_status.token[0]=0;
+    release_generation=owner_generation;release_after_send=true;finish_release();
+    receive(3,auth_b,b,false);assert(!hello_authorized && !hello_trusted);
+    receive(3,auth,a,false);assert(hello_authorized && hello_trusted && v_computers.count==1);
+    const char *more[]={client_b,"44444444-4444-4444-4444-444444444444","55555555-5555-5555-5555-555555555555"};
+    for (unsigned i=0;i<3;i++) {
+        char key[65];memset(key,'b'+(int)i,64);key[64]=0;
+        assert(vibe_trusted_put(&v_computers,more[i],key));
+    }
+    char full[512];snprintf(full,sizeof(full),"{\"type\":\"connection.request\",\"client\":\"66666666-6666-6666-6666-666666666666\",\"request\":\"%s\",\"device\":\"aabbccddeeff\",\"digest\":\"%s\",\"name\":\"New Mac\"}",request,credential);
+    receive(2,full,b,false);assert(strstr(reply,"full") && v_status.connection_request.phase==V_CONNECT_NONE);
+    assert(!strcmp(owner_client,client) && v_computers.count==4);
+    receive(2,ask,a,false);assert(strstr(reply,"pending")); /* Existing computers can rotate their credential when full. */
     puts("Connection ingress: physical approval, credential commitment, timeout, refusal, busy, dual link, generation isolation and 100 unpair/re-pair cycles PASS");
 }

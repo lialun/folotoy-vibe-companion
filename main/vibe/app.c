@@ -37,6 +37,8 @@ vibe_model_t v_model;
 vibe_prefs_t v_prefs;
 vibe_status_t v_status;
 vibe_quota_store_t v_quotas;
+vibe_trusted_computers_t v_computers;
+bool v_legacy_computer;
 SemaphoreHandle_t v_mutex;
 QueueHandle_t v_queue;
 static atomic_bool input_overflow;
@@ -57,7 +59,7 @@ void vibe_snapshot(vibe_model_t *m, vibe_prefs_t *p, vibe_status_t *s) {
     if (m) *m=v_model;
     if (p) *p=v_prefs;
     if (s) {
-        *s=v_status;
+        *s=v_status;s->paired=v_computers.count>0 || v_legacy_computer;
         uint64_t now=vibe_now();s->quota_pages=vibe_quota_pages(&v_quotas,now);
         unsigned base=v_prefs.weather_enabled && v_status.forecast.valid?4:0,selected=0;
         s->quota.count=0;s->quota_part=s->quota_parts=0;
@@ -65,6 +67,7 @@ void vibe_snapshot(vibe_model_t *m, vibe_prefs_t *p, vibe_status_t *s) {
     }
     xSemaphoreGive(v_mutex);
 }
+#include "trusted_store.inc"
 static void load_prefs(void) {
     v_prefs=vibe_prefs_default();v_status.appearance=vibe_appearance_default();
     nvs_handle_t n;
@@ -77,7 +80,7 @@ static void load_prefs(void) {
             if (nvs_get_blob(n,"prefs",&legacy,&z)==ESP_OK)
                 vibe_prefs_decode(&legacy,z,true,&v_prefs,&v_status.appearance);
         }
-        z=sizeof(v_status.token);nvs_get_str(n,"token",v_status.token,&z);
+        load_computers(n);
         uint8_t skipped=0;
         if (nvs_get_u8(n,"intro_skipped",&skipped)==ESP_OK) intro_skipped=skipped==1;
         nvs_close(n);
@@ -178,18 +181,21 @@ static bool token_valid(const char *s) {
     for (int i=0;i<64;i++) if (!strchr("0123456789abcdef",s[i])) return false;
     return true;
 }
-static bool forget_computer(void) {
-    nvs_handle_t n;
-    if (nvs_open("vibe",NVS_READWRITE,&n)!=ESP_OK) return false;
-    esp_err_t erased=nvs_erase_key(n,"token");
-    bool saved=(erased==ESP_OK || erased==ESP_ERR_NVS_NOT_FOUND) &&
-        nvs_set_u8(n,"intro_skipped",0)==ESP_OK && nvs_commit(n)==ESP_OK;
-    nvs_close(n);
+static bool forget_computer(const char *client) {
+    vibe_trusted_computers_t next=v_computers;
+    if (client) {
+        if (!vibe_trusted_remove(&next,client)) return false;
+    } else next=(vibe_trusted_computers_t){0};
+    bool saved=save_computers(&next);
     if (saved) {
         v_status.connection_request=(vibe_connection_request_t){0};
         memset(&v_quotas,0,sizeof(v_quotas));v_status.token[0]=0;v_status.audio_ready=false;v_status.hotkey_ready=false;
         v_status.peer_seen_ms=0;v_status.peer=false;
-        intro_skipped=false;vibe_model_connection_boot(&v_model,false,false);
+        if (!v_computers.count) {
+            intro_skipped=false;nvs_handle_t n;
+            if (nvs_open("vibe",NVS_READWRITE,&n)==ESP_OK) {nvs_set_u8(n,"intro_skipped",0);nvs_commit(n);nvs_close(n);}
+        }
+        vibe_model_connection_boot(&v_model,v_computers.count>0,intro_skipped);
     }
     return saved;
 }
@@ -206,25 +212,28 @@ static void receive_json(const char *s) {
         const cJSON *clientj=cJSON_GetObjectItemCaseSensitive(o,"client"),*requestj=cJSON_GetObjectItemCaseSensitive(o,"request");
         const char *client=cJSON_IsString(clientj)?clientj->valuestring:NULL;
         const char *request=cJSON_IsString(requestj)?requestj->valuestring:NULL;
-        bool same=token_valid(token) && v_status.token[0] && !strcmp(token,v_status.token);
+        bool same=token_valid(token) && v_status.token[0] && !strcmp(token,v_status.token) && vibe_trusted_matches(&v_computers,client,token);
         if (vibe_connection_approved(token,client,request) || same) {
-            nvs_handle_t n;
-            bool saved=same || nvs_open("vibe",NVS_READWRITE,&n)==ESP_OK;
-            if (saved && !same) { saved=nvs_set_str(n,"token",token)==ESP_OK && nvs_commit(n)==ESP_OK;nvs_close(n); }
+            vibe_trusted_computers_t next=v_computers;
+            bool added=vibe_trusted_put(&next,client,token);
+            bool saved=added && ((same && !v_legacy_computer) || save_computers(&next));
             if (saved) {
                 if (!same) { memset(&v_quotas,0,sizeof(v_quotas));strcpy(v_status.token,token);vibe_network_commit(client);v_model.connection_from_menu=false; }
                 v_status.connection_request.phase=V_CONNECT_NONE;prefs_reply(id,NULL);
-            } else prefs_reply(id,"设备保存失败，请重试");
+            } else prefs_reply(id,added?"设备保存失败，请重试":"请先解除配对，再重新连接");
         }
     } else if (!v_status.token[0] || strcmp(token,v_status.token)) {
         /* Do not expose configuration to unauthenticated LAN traffic. */
     } else if (!strcmp(t->valuestring,"pc.unpair")) {
-        bool saved=forget_computer();prefs_reply(id,saved?NULL:"设备保存失败，请重试");
+        const cJSON *client=cJSON_GetObjectItemCaseSensitive(o,"client");
+        bool saved=cJSON_IsString(client) && vibe_connect_identity(client->valuestring) && forget_computer(client->valuestring);prefs_reply(id,saved?NULL:"设备保存失败，请重试");
         if (saved) vibe_network_release();
     } else if (!strcmp(t->valuestring,"pc.disconnect")) {
         v_status.peer_seen_ms=0;v_status.peer=false;
         v_status.audio_ready=false;v_status.hotkey_ready=false;vibe_network_release();
     } else if (!strcmp(t->valuestring,"pc.status")) {
+        if (v_legacy_computer && !v_model.recording && !v_status.audio_busy && !save_computers(&v_computers))
+            ESP_LOGW(TAG,"Computer registry migration deferred");
         unsigned seconds=5;
         if (integer(o,"idleHeartbeat",&seconds,5,30)) v_status.heartbeat_ms=vibe_peer_interval(seconds);
         v_status.audio_ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"audioReady"));
@@ -383,7 +392,7 @@ static void execute(unsigned actions) {
         intro_skipped=saved;vibe_model_intro_saved(&v_model,saved,vibe_now());
     }
     if (actions&V_UNPAIR) {
-        if (forget_computer()) vibe_network_release();
+        if (forget_computer(NULL)) vibe_network_release();
     }
 }
 static void report_memory(void) {
@@ -404,7 +413,7 @@ void app_main(void) {
     esp_err_t n=nvs_flash_init();
     if (n!=ESP_OK) { ESP_LOGE(TAG,"NVS unavailable (%s); retained data was not erased",esp_err_to_name(n)); return; }
     load_prefs(); vibe_model_init(&v_model,vibe_now()); model_from_prefs();
-    vibe_model_connection_boot(&v_model,v_status.token[0]!=0,intro_skipped);
+    vibe_model_connection_boot(&v_model,v_computers.count>0 || v_legacy_computer,intro_skipped);
     vibe_radio_catalog_init();
     v_status.tz_minutes=v_status.appearance.tz_minutes; v_status.battery=-1;v_status.heartbeat_ms=5000;
     uint8_t mac[6]; esp_read_mac(mac,ESP_MAC_WIFI_STA);

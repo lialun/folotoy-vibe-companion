@@ -152,18 +152,15 @@ bool vibe_connection_approved(const char *token,const char *client,const char *r
     for (unsigned i=0;i<32;i++) snprintf(hex+i*2,3,"%02x",hash[i]);
     return vibe_connect_matches(r,client,request,hex);
 }
+#include "link_owner.inc"
 void vibe_network_commit(const char *client) {
     xSemaphoreTake(peer_mutex,portMAX_DELAY);
-    memset(&peer,0,sizeof(peer));memset(&ble_peer,0,sizeof(ble_peer));
-    ble_owner=commit_ble;prefer_ble=false;wifi_seen=ble_seen=0;
+    select_owner_locked(client,v_status.token);
+    ble_owner=commit_ble;
     if (commit_ble) { ble_peer=commit_peer;ble_seen=vibe_now(); }
     else { peer=commit_peer;wifi_seen=vibe_now(); }
-    strlcpy(owner_client,client,sizeof(owner_client));owner_seen=vibe_now();
-    ++owner_generation;release_after_send=false;
     xSemaphoreGive(peer_mutex);
     v_status.peer_seen_ms=vibe_now();v_status.ble_peer=commit_ble;
-    v_status.audio_ready=false;v_status.hotkey_ready=false;v_status.radio_pcm=false;
-    v_status.voice_v2=false;v_status.voice_repair=false;v_status.voice_handshake=false;v_status.voice_interleave=false;v_status.voice_feedback=false;
 }
 void vibe_send_json(const char *s) {
     vibe_send_json_owned(s,0,V_DELIVERY_PRIMARY);
@@ -386,7 +383,11 @@ static esp_err_t json_response(httpd_req_t *r,cJSON *o) {
     if (!s) return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
     httpd_resp_set_type(r,"application/json");
     httpd_resp_set_hdr(r,"Cache-Control","no-store");
-    esp_err_t e=httpd_resp_sendstr(r,s); free(s); return e;
+    esp_err_t e=httpd_resp_sendstr(r,s);free(s);
+    ESP_LOGI(TAG,"Setup JSON: result=%s heap=%u largest=%u stack=%u",esp_err_to_name(e),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    return e;
 }
 static esp_err_t setup_page(httpd_req_t *r) {
     if (!local_setup_request(r)) return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"Use device Wi-Fi");
@@ -401,18 +402,32 @@ static esp_err_t setup_page(httpd_req_t *r) {
     httpd_resp_set_type(r,"text/html; charset=utf-8");
     httpd_resp_set_hdr(r,"Cache-Control","no-store");
     httpd_resp_set_hdr(r,"Content-Security-Policy","default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'");
-    return httpd_resp_send(r,(const char *)provisioning_html_start,provisioning_html_end-provisioning_html_start);
+    extern const unsigned char portal_gzip_start[] asm("_binary_vibe_portal_gzip_start");
+    extern const unsigned char portal_gzip_end[] asm("_binary_vibe_portal_gzip_end");
+    char encodings[128];
+    bool compressed=httpd_req_get_hdr_value_str(r,"Accept-Encoding",encodings,sizeof(encodings))==ESP_OK &&
+        vibe_portal_accepts_gzip(encodings);
+    httpd_resp_set_hdr(r,"Vary","Accept-Encoding");
+    if (compressed) httpd_resp_set_hdr(r,"Content-Encoding","gzip");
+    const unsigned char *begin=compressed?portal_gzip_start:provisioning_html_start;
+    const unsigned char *end=compressed?portal_gzip_end:provisioning_html_end;
+    esp_err_t result=httpd_resp_send(r,(const char *)begin,end-begin);
+    ESP_LOGI(TAG,"Setup page: result=%s heap=%u largest=%u stack=%u",esp_err_to_name(result),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    return result;
 }
 static esp_err_t setup_status(httpd_req_t *r) {
     if (!local_setup_request(r)) return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"Use device Wi-Fi");
     xSemaphoreTake(v_mutex,portMAX_DELAY);
-    vibe_status_t s=v_status; setup_phase_t phase=setup_phase;
+    bool connected=v_status.wifi;setup_phase_t phase=setup_phase;
+    char notice[sizeof(v_status.notice)];strlcpy(notice,v_status.notice,sizeof(notice));
     xSemaphoreGive(v_mutex);
     cJSON *o=cJSON_CreateObject();
-    cJSON_AddBoolToObject(o,"connected",s.wifi && phase==SETUP_CONNECTED);
+    cJSON_AddBoolToObject(o,"connected",connected && phase==SETUP_CONNECTED);
     cJSON_AddBoolToObject(o,"connecting",phase==SETUP_CONNECTING);
     cJSON_AddBoolToObject(o,"failed",phase==SETUP_FAILED);
-    cJSON_AddStringToObject(o,"message",s.notice); return json_response(r,o);
+    cJSON_AddStringToObject(o,"message",notice); return json_response(r,o);
 }
 static esp_err_t setup_saved(httpd_req_t *r) {
     if (!local_setup_request(r)) return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"Use device Wi-Fi");
@@ -533,56 +548,20 @@ static void portal_dns_start(void) {
     }
     if (dns_socket<0) ESP_LOGW(TAG,"Captive DNS unavailable; manual setup URL remains usable");
 }
-static void start_ap(void) {
-    if (ap_started) return;
-    if (ap_started) { ui_provision(true); return; }
-    setup_saved_at=0;
-    xSemaphoreTake(v_mutex,portMAX_DELAY);
-    snprintf(v_status.ap_name,sizeof(v_status.ap_name),"Vibe-Setup-%.6s",v_status.device_id+6);
-    setup_phase=SETUP_SELECT;
-    strlcpy(v_status.notice,"选择 Wi-Fi",sizeof(v_status.notice));
-    wifi_config_t ap={0};
-    strlcpy((char *)ap.ap.ssid,v_status.ap_name,sizeof(ap.ap.ssid));
-    ap.ap.ssid_len=strlen(v_status.ap_name); ap.ap.channel=1; ap.ap.max_connection=2;
-    ap.ap.authmode=WIFI_AUTH_OPEN; v_status.provisioning=true;
-    bool connected=v_status.wifi;
-    xSemaphoreGive(v_mutex);
-    /* A saved-but-unavailable network must not keep the driver connecting
-     * while the phone scans. Portal mode owns disconnected STA attempts until
-     * a submitted network is tested or the portal is closed. */
-    auto_connection.pending=false;
-    if (!connected) esp_wifi_disconnect();
-    esp_wifi_set_mode(WIFI_MODE_APSTA); esp_wifi_set_config(WIFI_IF_AP,&ap);
-    if (!wifi_started) { ESP_ERROR_CHECK(esp_wifi_start());wifi_started=true; }
-    httpd_config_t config=HTTPD_DEFAULT_CONFIG();
-    config.stack_size=6144; config.max_uri_handlers=6; config.max_open_sockets=4; config.lru_purge_enable=true;
-    config.recv_wait_timeout=3; config.send_wait_timeout=3;
-    if (httpd_start(&web,&config)==ESP_OK) {
-        const httpd_uri_t routes[]={
-            {.uri="/",.method=HTTP_GET,.handler=setup_page},
-            {.uri="/status",.method=HTTP_GET,.handler=setup_status},
-            {.uri="/scan",.method=HTTP_GET,.handler=setup_scan},
-            {.uri="/saved",.method=HTTP_GET,.handler=setup_saved},
-            {.uri="/forget",.method=HTTP_POST,.handler=setup_forget},
-            {.uri="/save",.method=HTTP_POST,.handler=setup_save}};
-        for (size_t i=0;i<sizeof(routes)/sizeof(routes[0]);i++) httpd_register_uri_handler(web,&routes[i]);
-        httpd_register_err_handler(web,HTTPD_404_NOT_FOUND,portal_redirect);
-    }
-    portal_dns_start();
-    ap_started=true; ui_provision(true);
+static void network_ble_disconnected(uint16_t handle);
+static esp_err_t setup_pause_ble(void) {
+    esp_err_t result=vibe_ble_pause();if (result!=ESP_OK) return result;
+    /* The host has joined, so every queued BLE item belongs to the stopped
+     * transport. Drain before handles can be reused on resume. */
+    vibe_ble_ingress_t *rx;
+    while (xQueueReceive(ble_rx_queue,&rx,0)==pdTRUE) free(rx);
+    xSemaphoreTake(peer_mutex,portMAX_DELAY);
+    uint16_t handle=ble_owner?(uint16_t)(ntohs(ble_peer.sin_port)-1):UINT16_MAX;
+    xSemaphoreGive(peer_mutex);
+    if (handle!=UINT16_MAX) network_ble_disconnected(handle);
+    return ESP_OK;
 }
-static void finish_ap(bool completed) {
-    if (!ap_started) return;
-    setup_saved_at=0;
-    if (dns_socket>=0) { close(dns_socket); dns_socket=-1; }
-    if (web) { httpd_stop(web); web=NULL; }
-    esp_wifi_set_mode(WIFI_MODE_STA); ap_started=false;
-    xSemaphoreTake(profiles_mutex,portMAX_DELAY);bool has_saved=networks.count!=0;xSemaphoreGive(profiles_mutex);
-    if (!has_saved) { esp_wifi_stop();wifi_started=false; }
-    vibe_wifi_retry_reset(&auto_connection,vibe_now());
-    xSemaphoreTake(v_mutex,portMAX_DELAY); v_status.provisioning=false; xSemaphoreGive(v_mutex);
-    ui_provision(completed?2:0);
-}
+#include "setup_lifecycle.inc"
 typedef struct {
     bool paired,wifi,busy;
     uint32_t revision;
@@ -593,19 +572,19 @@ typedef struct {
 static link_snapshot_t link_snapshot(void) {
     link_snapshot_t s;
     xSemaphoreTake(v_mutex,portMAX_DELAY);
-    s.paired=v_status.token[0]!=0;s.wifi=v_status.wifi;s.revision=v_status.settings_revision;
+    s.paired=v_computers.count>0 || v_legacy_computer;s.wifi=v_status.wifi;s.revision=v_status.settings_revision;
     s.heartbeat=v_status.heartbeat_ms;s.seen=v_status.peer_seen_ms;
     s.busy=s.seen && vibe_now()-s.seen<vibe_peer_timeout(s.heartbeat);
     strlcpy(s.device,v_status.device_id,sizeof(s.device));strlcpy(s.ip,v_status.ip,sizeof(s.ip));
     xSemaphoreGive(v_mutex);return s;
 }
-int vibe_discovery_json(char *buffer,size_t capacity,bool authorized,bool auth_checked) {
+int vibe_discovery_json(char *buffer,size_t capacity,bool authorized,bool auth_checked,bool trusted) {
     link_snapshot_t s=link_snapshot();
-    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"uptimeMs\":%llu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"agentQuota\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"voiceV2\":1,\"inputCommands\":1,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long long)vibe_now(),(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
+    int n=snprintf(buffer,capacity,"{\"event\":\"device.hello\",\"proto\":2,\"device\":\"%s\",\"paired\":%s,\"authorized\":%s,\"trusted\":%s,\"authChecked\":%s,\"busy\":%s,\"boot\":%lu,\"uptimeMs\":%llu,\"settingsRevision\":%lu,\"clientPort\":true,\"statusBeacon\":true,\"agentNotify\":1,\"agentQuota\":1,\"idleHeartbeat\":30,\"powerDiagnostics\":1,\"selection\":true,\"connectionApproval\":1,\"dualLink\":true,\"voiceV2\":1,\"inputCommands\":1,\"radioPCM\":1,\"radioFormats\":2,\"weatherCache\":1,\"wifi\":%s,\"ip\":\"%s\",\"ble\":true}",s.device,s.paired?"true":"false",authorized?"true":"false",trusted?"true":"false",auth_checked?"true":"false",s.busy?"true":"false",(unsigned long)boot_nonce,(unsigned long long)vibe_now(),(unsigned long)s.revision,s.wifi?"true":"false",s.wifi?s.ip:"");
     return n>0 && (size_t)n<capacity ? n : 0;
 }
-static void hello_to(const struct sockaddr_in *target,bool via_ble,bool authorized,bool auth_checked) {
-    char line[512];int n=vibe_discovery_json(line+1,sizeof(line)-1,authorized,auth_checked);line[0]=2;
+static void hello_to(const struct sockaddr_in *target,bool via_ble,bool authorized,bool auth_checked,bool trusted) {
+    char line[512];int n=vibe_discovery_json(line+1,sizeof(line)-1,authorized,auth_checked,trusted);line[0]=2;
     if (!n) return;
     if (via_ble) (void)vibe_ble_send_to(ntohs(target->sin_port)-1,2,line+1,n);
     else if (target && target->sin_port) sendto(udp,line,n+1,MSG_DONTWAIT,(const struct sockaddr *)target,sizeof(*target));
@@ -624,6 +603,9 @@ static void network_ble_disconnected(uint16_t handle) {
     bool owned=ble_owner && ntohs(ble_peer.sin_port)==handle+1;
     if (owned) { ble_owner=false;ble_seen=0;memset(&ble_peer,0,sizeof(ble_peer)); }
     bool keep_wifi=vibe_peer_use_wifi(vibe_now(),wifi_seen,0,peer.sin_addr.s_addr && peer.sin_port,false,false);
+    /* A quiet Wi-Fi path can still have a valid idle-heartbeat lease. Only
+     * release immediately when BLE was the owner's sole attachment. */
+    if (owned && !peer.sin_port) owner_seen=0;
     xSemaphoreGive(peer_mutex);
     if (owned) {
         xSemaphoreTake(v_mutex,portMAX_DELAY);v_status.ble_peer=false;
@@ -654,6 +636,10 @@ static void network_task(void *arg) {
 
     for (;;) {
         uint64_t now=vibe_now(); int cmd;
+        if (!ap_started && setup_ble_paused && now>=ble_resume_at) {
+            xSemaphoreTake(v_mutex,portMAX_DELAY);bool busy=v_model.recording || v_status.audio_busy;xSemaphoreGive(v_mutex);
+            if (!busy) setup_restore_ble(now);
+        }
         xSemaphoreTake(v_mutex,portMAX_DELAY);
         bool clock_wifi=v_status.wifi,clock_paused=v_model.recording || v_status.provisioning;
         xSemaphoreGive(v_mutex);
@@ -736,7 +722,7 @@ static void network_task(void *arg) {
                 strlcpy(v_status.notice,"连接已中断，请重试",sizeof(v_status.notice)); xSemaphoreGive(v_mutex);
             } else if (vibe_portal_close_due(s.wifi,setup_saved_at,now)) finish_ap(true);
         }
-        char metadata[512];int metadata_size=vibe_discovery_json(metadata,sizeof(metadata),false,false);
+        char metadata[512];int metadata_size=vibe_discovery_json(metadata,sizeof(metadata),false,false,false);
         if (metadata_size>0) vibe_ble_publish_metadata(metadata,metadata_size);
         static unsigned char packet[VIBE_JSON_MAX+2]; struct sockaddr_in from; socklen_t len=sizeof(from);
         vibe_model_t power;vibe_snapshot(&power,NULL,NULL);

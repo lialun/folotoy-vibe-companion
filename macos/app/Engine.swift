@@ -57,6 +57,7 @@ final class Engine {
     var connectionPaused:Bool {lifecycle.userPaused}
     private var connectionRequest="",requestStarted=Date.distantPast,lastRequest=Date.distantPast,connectIntent=false
     private var requestDelivered=false
+    private var waitingForOwner=false
     private var wifiLastSeen=Date.distantPast,bleLastSeen=Date.distantPast
     private var connectionMessage="",searchStarted=Date()
     private var lastSeen=Date.distantPast,lastBeacon=Date.distantPast
@@ -134,7 +135,7 @@ final class Engine {
         ble.onDisconnected={ [weak self] message in
             guard let self=self,!self.powerSuspended else { return }
             self.bleLastSeen = .distantPast;self.updateTransport()
-            if !self.paused && Date().timeIntervalSince(self.wifiLastSeen)>ConnectionTiming.linkFresh { self.connectionMessage=message }
+            if !self.paused && !self.waitingForOwner && Date().timeIntervalSince(self.wifiLastSeen)>ConnectionTiming.linkFresh { self.connectionMessage=message }
             self.publish()
         }
         ble.onAuthenticationFailed={ [weak self] message in
@@ -145,7 +146,7 @@ final class Engine {
         }
         ble.onStatus={ [weak self] status in
             guard let self=self,!self.powerSuspended else { return };self.state.bluetoothStatus=status
-            if !self.paused && !self.authenticated && self.connectionRequest.isEmpty { self.connectionMessage=status }
+            if !self.paused && !self.waitingForOwner && !self.authenticated && self.connectionRequest.isEmpty { self.connectionMessage=status }
             self.publish()
         }
         ble.onPairingRepairChanged={ [weak self] id,required in
@@ -231,6 +232,7 @@ final class Engine {
     func retryBluetooth() { work.async {
         guard self.running,!self.powerSuspended,!self.device.isEmpty else { return }
         self.paused=false
+        self.waitingForOwner=false
         if !self.authenticated { self.connectIntent=true;self.connectionMessage="正在连接蓝牙…" }
         if !self.authenticated && self.connectionRequest.isEmpty && self.token.isEmpty { self.beginConnectionRequest() }
         self.bluetooth?.scan();self.bluetooth?.connect(self.device,resetBackoff:true);self.publish()
@@ -241,7 +243,7 @@ final class Engine {
         if authenticated { send(["type":"pc.disconnect","token":token]) }
         bluetooth?.disconnect();disconnect("已切换设备");device=id;token=PairingStore.load(id) ?? ""
         transport=found.hasWiFi ? .wifi : .bluetooth
-        state.powerSnapshot=nil;state.bluetoothPairingRepairRequired=false;state.bluetoothStatus="";candidateToken="";peer=found.hasWiFi ? found.endpoint : Self.bleEndpoint
+        state.powerSnapshot=nil;state.bluetoothPairingRepairRequired=false;state.bluetoothStatus="";candidateToken="";waitingForOwner=false;peer=found.hasWiFi ? found.endpoint : Self.bleEndpoint
         paused=false;connectionMessage="";connectIntent=true
         if found.hasBLE { bluetooth?.connect(id,resetBackoff:true) }
         if token.isEmpty { beginConnectionRequest() } else { beacon(broadcast:false) }
@@ -254,9 +256,10 @@ final class Engine {
         if !connectionRequest.isEmpty { sendOnAvailableLinks(connectionBody(type:"connection.cancel")) }
         connectionRequest="";requestDelivered=false;pairing=false;candidateToken="";connectIntent=false
     }
-    private func beginConnectionRequest() {
+    private func beginConnectionRequest(retainCredential:Bool=false) {
         guard connectionRequest.isEmpty else { return }
-        token="";candidateToken=PairingStore.random();connectionRequest=UUID().uuidString.lowercased()
+        if !retainCredential {token=""}
+        candidateToken=PairingStore.random();connectionRequest=UUID().uuidString.lowercased()
         requestDelivered=false;requestStarted=Date();lastRequest = .distantPast;pairing=true;connectionMessage="正在请求连接…";sendConnectionRequest()
     }
     private func connectionBody(type:String)->[String:Any] {
@@ -470,9 +473,9 @@ final class Engine {
                 if !pending.values.contains(where:{$0.kind=="pair"}) {
                     connectionMessage="正在完成连接…";request("pair",extra:["request":connectionRequest])
                 }
-            case "denied","expired","cancelled","busy":
+            case "denied","expired","cancelled","busy","full":
                 let status=body["state"] as? String ?? ""
-                let message=status=="denied" ? "设备已拒绝连接" : status=="busy" ? "设备忙，请稍后重试" : "连接确认已取消或超时"
+                let message=status=="full" ? "设备已记住 4 台电脑，请先在其中一台解除配对" : status=="denied" ? "设备已拒绝连接" : status=="busy" ? "设备忙，请稍后重试" : "连接确认已取消或超时"
                 cancelConnectionRequest();paused=true;connectionMessage=message;bluetooth?.disconnect()
             default:break
             }
@@ -481,7 +484,15 @@ final class Engine {
         if case .event(let body)=packet,let found=(viaBLE ? discovery.acceptBLE(body,id:device) : discovery.accept(body,from:from)) {
             guard !paused,found.id==device else { return }
             if !token.isEmpty,body["authChecked"] as? Bool==true,body["authorized"] as? Bool==false {
-                if connectIntent { beginConnectionRequest() }
+                if body["trusted"] as? Bool==true {
+                    if connectIntent {beginConnectionRequest(retainCredential:true)}
+                    else {
+                        let message="设备正在其他电脑上使用，空闲后自动连接"
+                        if !waitingForOwner {disconnect(message)}
+                        waitingForOwner=true;connectionMessage=message
+                        bluetooth?.waitForOwner(device)
+                    }
+                } else if connectIntent { beginConnectionRequest() }
                 else {
                     let message=found.paired ? "设备已切换到其他电脑" : "设备已解除配对"
                     disconnect(message);paused=true;connectionMessage=message;bluetooth?.disconnect()
@@ -507,7 +518,7 @@ final class Engine {
             if voiceEventScope != scope {voiceEventScope=scope;voice.resetScope();inputCommands.resetScope()}
             inputCommands.strict=body["inputCommands"] as? Int==1
             if let uptime=body["uptimeMs"] as? Double {inputCommands.observe(milliseconds:uptime,now:ProcessInfo.processInfo.systemUptime)}
-            authenticated=true;connectIntent=false;lastSeen=Date();connectionMessage=""
+            authenticated=true;waitingForOwner=false;connectIntent=false;lastSeen=Date();connectionMessage=""
             if viaBLE { bleLastSeen=Date() } else { wifiLastSeen=Date() }
             updateTransport();state.address=transport.title
             let revision=(body["settingsRevision"] as? NSNumber)?.uint32Value
@@ -625,7 +636,7 @@ final class Engine {
             guard let id=body["id"] as? String,let entry=pending.removeValue(forKey:id) else { return }
             let ok=body["ok"] as? Bool ?? false
             if ok,entry.kind=="pair" {
-                token=candidateToken;candidateToken="";connectionRequest="";requestDelivered=false;pairing=false;authenticated=true;connectIntent=false;lastSeen=Date();connectionMessage=""
+                token=candidateToken;candidateToken="";connectionRequest="";requestDelivered=false;pairing=false;authenticated=true;waitingForOwner=false;connectIntent=false;lastSeen=Date();connectionMessage=""
                 if transport == .wifi { wifiLastSeen=Date() } else { bleLastSeen=Date() }
                 if PairingStore.save(token,device:device) { UserDefaults.standard.set(device,forKey:"device") }
                 else { state.error="无法保存本地配对信息，重启后需要重新配对。请检查账户文件权限。" }
@@ -800,6 +811,7 @@ final class Engine {
         work.async { self.voice.cancel(reason:"shortcut-changed");self.inputCommands.cancel(now:ProcessInfo.processInfo.systemUptime);self.shortcut=spec }
     }
     private func disconnect(_ message:String) {
+        waitingForOwner=false
         transportPolicy.reset()
         stopWeather();weatherLocation=nil;stopRadioPlayback()
         authenticated=false;pairing=false;connectionMessage="";slowHeartbeat=false;wifiLastSeen = .distantPast;bleLastSeen = .distantPast;state.powerAvailable=false;state.powerLoading=false
@@ -851,6 +863,7 @@ final class Engine {
         engine.setBluetoothPairingRepair(engine.device,required:true)
         check(engine.state.bluetoothPairingRepairRequired,"lost pairing records expose a repair action for the selected device")
         engine.setBluetoothPairingRepair(engine.device,required:false)
+        testTrustedStandby(check)
         var lan=sockaddr_in();lan.sin_family=sa_family_t(AF_INET);lan.sin_port=LANSocket.discoveryPort.bigEndian;lan.sin_addr.s_addr=inet_addr("192.168.1.20")
         let hello:[String:Any]=["event":"device.hello","device":engine.device,"paired":true,"authorized":true,"authChecked":true,"boot":1,"agentNotify":1]
         _=engine.discovery.accept(hello,from:lan)
@@ -982,6 +995,46 @@ final class Engine {
             radio.handle(["event":"radio.open","session":session,"url":"http://127.0.0.1:9/absent","window":16,"format":3])
             check(radio.radioPlayback==nil && radio.radioActivity==nil,"unsupported format cannot create a decoder or timing activity")
         }
+    }
+    private static func testTrustedStandby(_ check:(Bool,String)->Void) {
+        let engine=Engine(preview:true,lanEnabled:false,bleEnabled:false)
+        engine.device="aabbccddeeff";engine.token=String(repeating:"a",count:64)
+        engine.clientID="11111111-1111-1111-1111-111111111111"
+        var lan=sockaddr_in();lan.sin_family=sa_family_t(AF_INET);lan.sin_port=LANSocket.discoveryPort.bigEndian;lan.sin_addr.s_addr=inet_addr("192.168.1.20")
+        let ready:[String:Any]=["event":"device.hello","device":engine.device,"paired":true,"authorized":true,"authChecked":true,"trusted":true,"boot":1]
+        var occupied=ready;occupied["authorized"]=false;occupied["busy"]=true
+        func feed(_ body:[String:Any]) {
+            var data=Data([2]);data.append(try! JSONSerialization.data(withJSONObject:body));engine.processPacket(data,from:lan,viaBLE:false)
+        }
+        let credential=engine.token
+        for _ in 0..<100 {
+            feed(occupied)
+            check(engine.waitingForOwner && !engine.paused && !engine.authenticated && engine.token==credential && engine.connectionRequest.isEmpty,
+                "trusted standby keeps its credential and automatic reconnect without issuing a physical request")
+            feed(ready)
+            check(engine.authenticated && !engine.waitingForOwner && !engine.paused && engine.token==credential,
+                "an available trusted device reconnects without a click or another pairing")
+        }
+        feed(occupied);engine.running=true;engine.audioProbeBusy=true
+        engine.retryNow(resume:true);feed(occupied);engine.running=false
+        check(engine.waitingForOwner && !engine.connectIntent && engine.connectionRequest.isEmpty && engine.token==credential,
+            "Refresh preserves automatic standby instead of requesting a physical takeover")
+        engine.disconnect("manual-test");engine.paused=true;feed(ready)
+        check(engine.paused && !engine.authenticated,"trusted availability never overrides a manual disconnect")
+        engine.paused=false;engine.connectIntent=true;feed(occupied)
+        check(!engine.connectionRequest.isEmpty && engine.token==credential && !engine.candidateToken.isEmpty,
+            "explicit takeover requests confirmation without losing the prior trusted credential")
+        let request=engine.connectionRequest
+        feed(["event":"connection.reply","request":request,"state":"denied"])
+        check(engine.paused && engine.token==credential && engine.connectionRequest.isEmpty,
+            "a declined manual takeover preserves the previous credential and stops that request")
+        engine.paused=false;engine.connectIntent=false
+        var revoked=occupied;revoked["trusted"]=false;feed(revoked)
+        check(engine.paused && !engine.authenticated,"a genuinely revoked credential still stops automatic connection")
+        engine.paused=false;engine.beginConnectionRequest(retainCredential:true)
+        feed(["event":"connection.reply","request":engine.connectionRequest,"state":"full"])
+        check(engine.paused && engine.connectionRequest.isEmpty && engine.connectionMessage.contains("4") && engine.token==credential,
+            "a full registry explains how to free a slot without deleting the local credential")
     }
     private static func testSocketLifetime(_ check:(Bool,String)->Void) {
         let engine=Engine(preview:true),cancelled=DispatchSemaphore(value:0)

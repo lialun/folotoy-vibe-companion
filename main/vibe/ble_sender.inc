@@ -11,6 +11,7 @@ static int send_to(uint16_t conn,unsigned char type,const void *bytes,size_t len
      * with lock acquisition; an overlapping control packet must not cause an
      * otherwise healthy BLE-only voice frame to be discarded immediately. */
     if (!tx_mutex || xSemaphoreTake(tx_mutex,pdMS_TO_TICKS(background?0:vibe_ble_tx_lock_ms(audio)))!=pdTRUE) return -1;
+    if (!ble_enabled || !ready) {xSemaphoreGive(tx_mutex);return -1;}
     xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(conn);
     bool subscribed=link && link->subscribed;
     uint32_t generation=link?link->generation:0;

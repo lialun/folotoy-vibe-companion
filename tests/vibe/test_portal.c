@@ -67,6 +67,14 @@ static void phone_probe_burst(void) {
 
 int main(void) {
     phone_probe_burst();
+    assert(!vibe_portal_accepts_gzip(NULL) && !vibe_portal_accepts_gzip("") && !vibe_portal_accepts_gzip("br, identity"));
+    assert(vibe_portal_accepts_gzip("gzip, deflate, br") && vibe_portal_accepts_gzip("GZip ; q=0.125"));
+    assert(vibe_portal_accepts_gzip("*;q=1") && !vibe_portal_accepts_gzip("gzip;q=0,*;q=1"));
+    assert(vibe_portal_accepts_gzip("gzip;q=1.000") && !vibe_portal_accepts_gzip("gzip;q=1.001"));
+    assert(!vibe_portal_accepts_gzip("gzip;q=0.000") && !vibe_portal_accepts_gzip("gzip;q=0.0001"));
+    assert(!vibe_portal_accepts_gzip("gzip;q=2") && !vibe_portal_accepts_gzip("gzip;q=foo"));
+    assert(!vibe_portal_accepts_gzip("notgzip") && vibe_portal_accepts_gzip("br, gzip;q=0.5, deflate"));
+
     assert(!vibe_portal_close_due(true,0,5000));
     assert(!vibe_portal_close_due(true,1000,3999));
     assert(vibe_portal_close_due(true,1000,4000));

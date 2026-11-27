@@ -74,7 +74,13 @@ int main(void) {
     assert(release(&g,V_UP,true,12)==V_INPUT_CONSUMED);
     assert(release(&g,V_DOWN,true,12)==V_INPUT_CONSUMED);
     assert(press(&g,V_SETTINGS,true,12)==V_INPUT_CONSUMED);
-    assert(release(&g,V_SETTINGS,true,12)==V_INPUT_REJECT);
+    assert(release(&g,V_SETTINGS,true,12)==V_INPUT_CONSUMED);
+    assert(g.active && g.armed && !g.down && !g.candidate);
+    assert(press(&g,V_SETTINGS,true,12)==V_INPUT_CONSUMED);
+    assert(vibe_prompt_input_event(&g,V_SETTINGS,V_LONG,true,12)==V_INPUT_CONSUMED);
+    assert(release(&g,V_SETTINGS,true,12)==V_INPUT_CONSUMED);
+    assert(press(&g,V_DOWN,true,12)==V_INPUT_CONSUMED);
+    assert(release(&g,V_DOWN,true,12)==V_INPUT_REJECT);
 
     g=(vibe_prompt_input_t){0};vibe_prompt_input_sync(&g,true,first,12);
     press(&g,V_UP,true,12);vibe_prompt_input_sync(&g,true,first,0);

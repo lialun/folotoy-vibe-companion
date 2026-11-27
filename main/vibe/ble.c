@@ -4,7 +4,7 @@
 #include "ble_links.h"
 #include "ble_tx_budget.h"
 #include "nimble/nimble_port.h"
-#include "nimble/nimble_port_freertos.h"
+#include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
 #include "services/gap/ble_svc_gap.h"
@@ -33,7 +33,7 @@ static ble_link_t *find_link(uint16_t handle) { return vibe_ble_link_find(&regis
 static uint16_t tx_handle;
 static SemaphoreHandle_t tx_mutex;
 static uint8_t address_type,message_id;
-static atomic_bool ready;
+static atomic_bool ready,ble_enabled,npl_initialized;
 static atomic_bool streaming;
 static atomic_bool radio_ingress;
 static struct ble_npl_event radio_clear_event;
@@ -60,6 +60,7 @@ uint32_t vibe_ble_generation(uint16_t handle) {
 }
 static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctx,void *arg) {
     (void)attr;
+    if (!ble_enabled) return BLE_ATT_ERR_UNLIKELY;
     if (arg) {
         char text[512];
         /* Never acquire an application/session mutex while inside the host.
@@ -90,6 +91,8 @@ static const struct ble_gatt_svc_def services[]={
 /* The NimBLE host owns these policies and callbacks. Never hold an application
  * mutex across a GAP/HCI call. Only a pending negotiation arms the callout. */
 static void parameter_schedule(void) {
+    if (!npl_initialized) return;
+    if (!ble_enabled) {ble_npl_callout_stop(&parameter_callout);return;}
     uint64_t now=vibe_now(),due=UINT64_MAX;
     for(unsigned i=0;i<LINK_SLOTS;i++) if(links[i].handle!=BLE_HS_CONN_HANDLE_NONE && links[i].parameters.due && links[i].parameters.due<due) due=links[i].parameters.due;
     if(due==UINT64_MAX) {ble_npl_callout_stop(&parameter_callout);return;}
@@ -131,11 +134,16 @@ static void radio_clear(struct ble_npl_event *event) {
 }
 void vibe_ble_radio_ingress(bool enabled) {
     atomic_store(&radio_ingress,enabled);
-    if (!enabled && ready) ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&radio_clear_event);
+    if (!tx_mutex) return;
+    xSemaphoreTake(tx_mutex,portMAX_DELAY);
+    if (!enabled && ble_enabled && ready) ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&radio_clear_event);
+    xSemaphoreGive(tx_mutex);
 }
 void vibe_ble_streaming(bool active) {
-    if(atomic_exchange(&streaming,active)==active || !ready)return;
-    ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&streaming_event);
+    if (atomic_exchange(&streaming,active)==active || !tx_mutex) return;
+    xSemaphoreTake(tx_mutex,portMAX_DELAY);
+    if (ble_enabled && ready) ble_npl_eventq_put(nimble_port_get_dflt_eventq(),&streaming_event);
+    xSemaphoreGive(tx_mutex);
 }
 static int gap_event(struct ble_gap_event *event,void *arg) {
     (void)arg;
@@ -209,7 +217,7 @@ static int gap_event(struct ble_gap_event *event,void *arg) {
     return 0;
 }
 static void advertise(void) {
-    if (!ready) return;
+    if (!ready || !ble_enabled) return;
     bool available=false;
     xSemaphoreTake(links_mutex,portMAX_DELAY);
     for (unsigned i=0;i<LINK_SLOTS;i++) if (links[i].handle==BLE_HS_CONN_HANDLE_NONE) available=true;
@@ -230,7 +238,7 @@ static void advertise(void) {
     if (ble_gap_adv_start(address_type,NULL,BLE_HS_FOREVER,&params,gap_event,NULL)==0) advertising_connectable=available;
 }
 static void on_reset(int reason) {
-    (void)reason;ready=false;ble_npl_callout_stop(&parameter_callout);
+    (void)reason;ready=false;if (npl_initialized) ble_npl_callout_stop(&parameter_callout);
     xSemaphoreTake(links_mutex,portMAX_DELAY);
     for (unsigned i=0;i<LINK_SLOTS;i++) {
         if (links[i].handle!=BLE_HS_CONN_HANDLE_NONE) vibe_ble_disconnected(links[i].handle);
@@ -239,6 +247,7 @@ static void on_reset(int reason) {
     xSemaphoreGive(links_mutex);
 }
 static void on_sync(void) {
+    if (!ble_enabled) return;
     if (ble_hs_id_infer_auto(0,&address_type)!=0) return;
     /* Preserve bonds while invalidating the host's cached GATT properties.
      * In particular, older firmware advertised RX without Write Command.
@@ -246,35 +255,17 @@ static void on_sync(void) {
     ble_svc_gatt_changed(1,UINT16_MAX);
     ready=true;advertise();
 }
-static void host_task(void *arg) { (void)arg;nimble_port_run();nimble_port_freertos_deinit(); }
-esp_err_t vibe_ble_init(void) {
-    /* Per-notification INFO output can flood the USB console during audio. */
-    esp_log_level_set("NimBLE",ESP_LOG_WARN);
-    tx_mutex=xSemaphoreCreateMutex();links_mutex=xSemaphoreCreateMutex();metadata_mutex=xSemaphoreCreateMutex();
-    if (!tx_mutex || !links_mutex || !metadata_mutex) return ESP_ERR_NO_MEM;
-    vibe_ble_links_init(&registry);
-    char initial[512];int count=vibe_discovery_json(initial,sizeof(initial),false,false);
-    if (count>0) vibe_ble_publish_metadata(initial,count);
-    esp_err_t error=nimble_port_init();if (error!=ESP_OK) return error;
-    ble_npl_callout_init(&parameter_callout,nimble_port_get_dflt_eventq(),parameter_update_event,NULL);
-    ble_npl_event_init(&streaming_event,streaming_update_event,NULL);
-    ble_npl_event_init(&radio_clear_event,radio_clear,NULL);
-    ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_hs_cfg.store_status_cb=ble_store_util_status_rr;
-    ble_hs_cfg.sm_io_cap=BLE_HS_IO_NO_INPUT_OUTPUT;ble_hs_cfg.sm_mitm=0;ble_hs_cfg.sm_sc=1;ble_hs_cfg.sm_bonding=1;
-    ble_hs_cfg.sm_our_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
-    ble_hs_cfg.sm_their_key_dist=BLE_SM_PAIR_KEY_DIST_ENC|BLE_SM_PAIR_KEY_DIST_ID;
-    ble_svc_gap_init();ble_svc_gatt_init();ble_store_config_init();
-    char name[24];snprintf(name,sizeof(name),"Vibe-%s",v_status.device_id);ble_svc_gap_device_name_set(name);
-    if (ble_gatts_count_cfg(services)!=0 || ble_gatts_add_svcs(services)!=0) { nimble_port_deinit();return ESP_FAIL; }
-    ble_att_set_preferred_mtu(247);nimble_port_freertos_init(host_task);return ESP_OK;
-}
 #include "ble_sender.inc"
+#include "ble_lifecycle.inc"
 void vibe_ble_voice_link(vibe_voice_counters_t *out) {
-    xSemaphoreTake(tx_mutex,portMAX_DELAY);uint16_t handle=voice_probe_handle;xSemaphoreGive(tx_mutex);
-    struct ble_gap_conn_desc desc;
-    if(handle==UINT16_MAX || ble_gap_conn_find(handle,&desc))return;
-    out->mtu=ble_att_mtu(handle);out->interval=desc.conn_itvl;
-    xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(handle);
-    if(link){out->tx_octets=link->tx_octets;out->tx_time=link->tx_time;out->tx_phy=link->tx_phy;out->rx_phy=link->rx_phy;}
-    xSemaphoreGive(links_mutex);
+    if (!tx_mutex) return;
+    xSemaphoreTake(tx_mutex,portMAX_DELAY);
+    uint16_t handle=voice_probe_handle;struct ble_gap_conn_desc desc;
+    if (ble_enabled && ready && handle!=UINT16_MAX && !ble_gap_conn_find(handle,&desc)) {
+        out->mtu=ble_att_mtu(handle);out->interval=desc.conn_itvl;
+        xSemaphoreTake(links_mutex,portMAX_DELAY);ble_link_t *link=find_link(handle);
+        if(link){out->tx_octets=link->tx_octets;out->tx_time=link->tx_time;out->tx_phy=link->tx_phy;out->rx_phy=link->rx_phy;}
+        xSemaphoreGive(links_mutex);
+    }
+    xSemaphoreGive(tx_mutex);
 }

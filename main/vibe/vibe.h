@@ -7,6 +7,7 @@
 #include "prefs.h"
 #include "messages.h"
 #include "connection_request.h"
+#include "trusted_computers.h"
 #include "agent_alert.h"
 #include "quota.h"
 #include "esp_err.h"
@@ -21,6 +22,7 @@ extern "C" {
 #define VIBE_PORT 33333
 typedef struct {
     vibe_connection_request_t connection_request;
+    bool paired; /* Derived from the trust registry by vibe_snapshot(). */
     bool ble_peer, wifi, peer, audio_ready, hotkey_ready, audio_busy, audio_fault, provisioning;
     bool radio_playing, radio_loading, radio_pcm, voice_v2, voice_repair, voice_handshake, voice_interleave;
     bool voice_feedback;
@@ -45,6 +47,9 @@ extern vibe_model_t v_model;
 extern vibe_prefs_t v_prefs;
 extern vibe_status_t v_status;
 extern vibe_quota_store_t v_quotas;
+/* Protected by v_mutex. Legacy credentials migrate on their first authenticated beacon. */
+extern vibe_trusted_computers_t v_computers;
+extern bool v_legacy_computer;
 extern SemaphoreHandle_t v_mutex;
 extern QueueHandle_t v_queue;
 uint64_t vibe_now(void);

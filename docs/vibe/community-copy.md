@@ -4,6 +4,8 @@
 
 ## Overview
 
+Remember up to four approved computers and reconnect automatically when the device becomes available. Keep an active computer connected, or confirm an immediate handover on the device when moving between home and work.
+
 Voice input. AI quota management. Your own Vibe companion. A companion desktop app makes device connections, voice setup and Agent integrations easy to manage.
 
 A major voice-stability upgrade makes input steadier across a wider range of network conditions. Wi-Fi and Bluetooth work together for steadier, more continuous voice input. Both links carry your voice while the computer merges audio and removes duplicate copies. One can fill gaps left by the other, and a usable surviving link can continue carrying speech after a disconnection. Single-link use also benefits from short audio history and missing-block repair.
@@ -18,20 +20,22 @@ Focus with a Pomodoro timer, take a break with radio, and keep the weather close
 
 ## Instructions
 
-1. Flash the firmware, install and open the Vibe Companion desktop app.
-2. Choose Bluetooth or Wi-Fi, click Connect in the app, and confirm on the device.
-3. Enable what you need: install integrations under Agent alerts; follow the app's guide for voice input.
+1. Flash the firmware, then install and open the matching Vibe Companion desktop app: https://github.com/lialun/folotoy-vibe-companion/releases/latest
+2. Choose Bluetooth or Wi-Fi, click Connect for the device in the app, and confirm the computer name on the device.
+3. Enable the features you need: install integrations under Agent alerts and follow the app's voice-input setup. For your own Agent, copy the Connect your own Agent prompt to integrate alerts and quota callbacks.
 
-Your own Agent: open Agent alerts → Connect your own Agent and copy the prompt to your coding Agent.
+Wi-Fi setup: open Functions → Device settings → Wi-Fi on the device. Join the Vibe-Setup hotspot shown on its screen from your phone. Wait for the setup page; if it has not appeared after 10 seconds, open http://192.168.4.1/ in a browser. Refresh the network list, select a network and save. The page shows connection progress and the device returns Home when connected. Reopen this page to change networks. Wi-Fi requires a mutually reachable local network; Bluetooth connects directly to the computer. Bluetooth temporarily disconnects during Wi-Fi setup and resumes when setup completes or closes.
 
-Desktop downloads: https://github.com/lialun/folotoy-vibe-companion/releases
-Keep the computer awake and the app running. The computer fetches radio and online quota data.
+Approve each computer once on the device, up to four computers. Another approved computer reconnects automatically after the current computer quits or its session expires and is released. To switch while the current computer is still active, click Connect in the other app and confirm on the device.
+
+On Home, use the upper button for voice input and the lower button for Enter. Other pages show actions beside their physical buttons. Except for Home voice and Enter, the first gesture on a dark screen only wakes it.
+
+Keep the computer awake and the app running. Input-method recognition, radio and online quotas may require internet access on the computer. Quotas use existing Agent logins and plans; expired observations disappear automatically.
+
+Update both desktop app and firmware. A full flash may reset device settings and pairing. A desktop update may require refreshing Accessibility permission.
 
 ## Changes
 
-v1.0.1
+v1.0.2
 
-A major voice-stability upgrade improves complementary dual delivery and single-link recovery across network conditions, reducing interruptions and missing audio during brief jitter or send congestion.
-Independent retries, receiver acknowledgements and larger bounded history work together. Recording takes priority in the shared voice/radio workspace; radio resumes after voice drains.
-Fix clock checks persistently rejecting normal Enter while retaining explicit gestures, deduplication and cancellation fences.
-Update both app and firmware. Very weak Wi-Fi alone can still time out, extreme loss can interrupt playback, and radio may still stutter over Bluetooth.
+Remember up to four computers, reconnect when available, and confirm immediate handovers on the device. Fix hotspot setup-page loading failures, show clear Wi-Fi connection progress, and simplify confirmation and audio-driver labels. Update both the desktop app and firmware.

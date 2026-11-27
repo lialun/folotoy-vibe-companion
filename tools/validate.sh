@@ -90,6 +90,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_package.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_compress_portal.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_voice_bench.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain/vibe \
@@ -183,8 +184,11 @@ run_static_checks() {
         tests/vibe/test_quota.c main/vibe/quota.c main/vibe/model.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_quota"
     "${test_dir}/test_vibe_quota"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe -Itests/vibe/vendor/cjson \
-        tests/vibe/test_connection.c main/vibe/voice_tx.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_connection"
+        tests/vibe/test_connection.c main/vibe/voice_tx.c main/vibe/trusted_computers.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_connection"
     "${test_dir}/test_vibe_connection"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe \
+        tests/vibe/test_trusted_computers.c main/vibe/trusted_computers.c -o "${test_dir}/test_vibe_trusted"
+    "${test_dir}/test_vibe_trusted"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
         -Itests/vibe/remote_stubs -Itests/vibe/stubs -Itests/audio_stubs -Icomponents/bsp/include -Imain/vibe -Itests/vibe/vendor/cjson \
         tests/vibe/test_radio_remote.c main/vibe/adpcm.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_radio_remote"
@@ -203,6 +207,12 @@ run_static_checks() {
         -Itests/audio_stubs -Itests/vibe/vendor/cjson tests/vibe/test_setup_scan.c \
         "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_setup_scan"
     "${test_dir}/test_vibe_setup_scan"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/audio_stubs tests/vibe/test_setup_lifecycle.c -o "${test_dir}/test_vibe_setup_lifecycle"
+    "${test_dir}/test_vibe_setup_lifecycle"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -Itests/bsp_stubs -Imain/vibe tests/vibe/test_ble_lifecycle.c -o "${test_dir}/test_vibe_ble_lifecycle"
+    "${test_dir}/test_vibe_ble_lifecycle"
     node tests/vibe/test_portal_ui.mjs
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Imain/vibe -Itests/vibe/vendor/cjson \
         tests/vibe/test_radio_library.c "${test_dir}/vibe_json.o" -lm -o "${test_dir}/test_vibe_library"

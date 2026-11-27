@@ -12,6 +12,7 @@ struct BLEConnectionRetry {
     private var lastFailure=Date.distantPast
     func allows(_ now:Date)->Bool { !pairingRepairRequired && (now>=nextAttempt || now<lastFailure) }
     mutating func requirePairingRepair() { pairingRepairRequired=true }
+    mutating func waitForOwner(until:Date) {nextAttempt=max(nextAttempt,until)}
     mutating func failed(_ now:Date) {
         let delays:[TimeInterval]=[3,6,12,24,48,60]
         failures=min(failures+1,delays.count);lastFailure=now
